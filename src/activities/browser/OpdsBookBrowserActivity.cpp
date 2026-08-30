@@ -7,6 +7,7 @@
 #include <LibraryBuilder.h>
 #include <Logging.h>
 #include <OpdsStream.h>
+#include <TailscaleManager.h>
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
@@ -34,6 +35,7 @@ void OpdsBookBrowserActivity::onEnter() {
 }
 
 void OpdsBookBrowserActivity::onExit() {
+  TAILSCALE.shutdown();
   releaseEntries();
   navigationHistory.clear();
   CatalogActivity::onExit();
