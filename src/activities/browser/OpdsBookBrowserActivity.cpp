@@ -14,6 +14,7 @@
 #include <OpdsPublicationDoc.h>
 #include <OpdsSearchTemplate.h>
 #include <StreamingJsonParser.h>
+#include <TailscaleManager.h>
 #include <Util.h>
 #include <WolfsslCrypto.h>
 
@@ -102,6 +103,7 @@ void OpdsBookBrowserActivity::onEnter() {
 }
 
 void OpdsBookBrowserActivity::onExit() {
+  TAILSCALE.shutdown();
   releaseEntries();
   navigationHistory.clear();
   if (!detailCoverPath.empty()) {
