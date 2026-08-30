@@ -1,0 +1,18 @@
+{
+  "name": "WireGuardLwIP",
+  "version": "0.0.0",
+  "build": {
+    "includeDir": "include",
+    "srcDir": "../../third_party/microlink/components/microlink/components/wireguard_lwip/src",
+    "srcFilter": [
+      "+<wireguard.c>",
+      "+<wireguardif.c>",
+      "+<crypto.c>",
+      "+<wireguard-platform-esp32.c>",
+      "+<crypto/refc/blake2s.c>",
+      "+<crypto/refc/chacha20.c>",
+      "+<crypto/refc/chacha20poly1305.c>",
+      "+<crypto/refc/poly1305-donna.c>"
+    ]
+  }
+}
