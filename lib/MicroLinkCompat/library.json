@@ -1,0 +1,7 @@
+{
+  "name": "MicroLinkCompat",
+  "version": "0.0.0",
+  "build": {
+    "includeDir": "src"
+  }
+}
