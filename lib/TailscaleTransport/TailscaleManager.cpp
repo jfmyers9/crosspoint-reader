@@ -7,13 +7,10 @@
 #include <cstring>
 
 #if defined(CROSSPOINT_ENABLE_TAILSCALE)
+#include <HalStorage.h>
 #include <WireGuardLwIP.h>
 #include <microlink.h>
 #include <wireguardif.h>
-
-#ifndef CROSSPOINT_TAILSCALE_AUTH_KEY
-#define CROSSPOINT_TAILSCALE_AUTH_KEY ""
-#endif
 #endif
 
 namespace {
@@ -134,54 +131,132 @@ bool TailscaleManager::prepareHost(const char* host, uint16_t port, uint32_t& pe
 
 void TailscaleManager::shutdown() {
 #if defined(CROSSPOINT_ENABLE_TAILSCALE)
-  if (!client) return;
-  microlink_destroy(client);
-  client = nullptr;
+  if (client) {
+    microlink_destroy(client);
+    client = nullptr;
+  }
   priorityPeer = 0;
+  memset(authKey, 0, sizeof(authKey));
+  authKeyFromStorage = false;
 #endif
 }
 
 #if defined(CROSSPOINT_ENABLE_TAILSCALE)
+TailscaleManager::AuthKeyStatus TailscaleManager::loadAuthKey() {
+  memset(authKey, 0, sizeof(authKey));
+  authKeyFromStorage = false;
+  if (!Storage.exists(AUTH_KEY_PATH)) return AuthKeyStatus::Missing;
+
+  HalFile file;
+  if (!Storage.openFileForRead("TAIL", AUTH_KEY_PATH, file)) return AuthKeyStatus::Invalid;
+  const size_t fileSize = file.fileSize();
+  if (fileSize == 0) return AuthKeyStatus::Missing;
+  if (fileSize >= sizeof(authKey)) {
+    LOG_ERR("TAIL", "Invalid enrollment key file length");
+    return AuthKeyStatus::Invalid;
+  }
+  const int bytesRead = file.read(authKey, fileSize);
+  if (bytesRead != static_cast<int>(fileSize)) {
+    LOG_ERR("TAIL", "Could not read complete enrollment key file");
+    memset(authKey, 0, sizeof(authKey));
+    return AuthKeyStatus::Invalid;
+  }
+
+  size_t first = 0;
+  size_t last = fileSize;
+  while (first < last && isspace(static_cast<unsigned char>(authKey[first]))) ++first;
+  while (last > first && isspace(static_cast<unsigned char>(authKey[last - 1]))) --last;
+  const size_t keyLength = last - first;
+  if (first > 0 && keyLength > 0) memmove(authKey, authKey + first, keyLength);
+  authKey[keyLength] = '\0';
+
+  constexpr char AUTH_KEY_PREFIX[] = "tskey-auth-";
+  if (keyLength <= sizeof(AUTH_KEY_PREFIX) - 1 || strncmp(authKey, AUTH_KEY_PREFIX, sizeof(AUTH_KEY_PREFIX) - 1) != 0) {
+    LOG_ERR("TAIL", "Enrollment key file does not contain a Tailscale auth key");
+    memset(authKey, 0, sizeof(authKey));
+    return AuthKeyStatus::Invalid;
+  }
+  for (size_t i = 0; i < keyLength; ++i) {
+    if (isspace(static_cast<unsigned char>(authKey[i]))) {
+      LOG_ERR("TAIL", "Enrollment key contains whitespace");
+      memset(authKey, 0, sizeof(authKey));
+      return AuthKeyStatus::Invalid;
+    }
+  }
+
+  authKeyFromStorage = true;
+  LOG_INF("TAIL", "Loaded one-time enrollment key from SD");
+  return AuthKeyStatus::Loaded;
+}
+
+void TailscaleManager::consumeAuthKey() {
+  if (!authKeyFromStorage) return;
+  if (Storage.remove(AUTH_KEY_PATH)) {
+    LOG_INF("TAIL", "Removed enrollment key from SD after connecting");
+  } else {
+    HalFile file;
+    if (Storage.openFileForWrite("TAIL", AUTH_KEY_PATH, file)) {
+      LOG_ERR("TAIL", "Could not remove enrollment key file; emptied it instead");
+    } else {
+      LOG_ERR("TAIL", "Could not consume enrollment key; revoke it manually");
+    }
+  }
+  authKeyFromStorage = false;
+}
+
 bool TailscaleManager::start(uint32_t peerIp) {
   if (client && priorityPeer == peerIp && microlink_is_connected(client)) return true;
   if (client) {
     shutdown();
   }
-  const microlink_config_t config = {
-      .auth_key = CROSSPOINT_TAILSCALE_AUTH_KEY,
-      .device_name = "crosspoint-x4pro",
-      .enable_derp = true,
-      .enable_stun = true,
-      .enable_disco = true,
-      .max_peers = CONFIG_ML_MAX_PEERS,
-      .wifi_tx_power_dbm = 0,
-      .priority_peer_ip = peerIp,
-      .disco_heartbeat_ms = 0,
-      .stun_interval_ms = 0,
-      .ctrl_watchdog_ms = 0,
-  };
-  if (CROSSPOINT_TAILSCALE_AUTH_KEY[0] == '\0') {
-    LOG_INF("TAIL", "Starting with stored node identity (no enrollment key)");
-  }
-  client = microlink_init(&config);
-  if (!client || microlink_start(client) != ESP_OK) {
-    LOG_ERR("TAIL", "Could not start MicroLink");
-    shutdown();
-    return false;
-  }
-  priorityPeer = peerIp;
+  const AuthKeyStatus authKeyStatus = loadAuthKey();
+  if (authKeyStatus == AuthKeyStatus::Invalid) return false;
 
-  const unsigned long startedAt = millis();
-  while (!microlink_is_connected(client) && millis() - startedAt < CONNECT_TIMEOUT_MS) {
-    if (microlink_get_state(client) == ML_STATE_ERROR) break;
-    delay(250);
-  }
-  if (!microlink_is_connected(client)) {
-    LOG_ERR("TAIL", "Timed out connecting to tailnet");
+  const uint8_t connectionCount = authKeyStatus == AuthKeyStatus::Loaded ? 2 : 1;
+  for (uint8_t connection = 0; connection < connectionCount; ++connection) {
+    const microlink_config_t config = {
+        .auth_key = authKey,
+        .device_name = "crosspoint-x4pro",
+        .enable_derp = true,
+        .enable_stun = true,
+        .enable_disco = true,
+        .max_peers = CONFIG_ML_MAX_PEERS,
+        .wifi_tx_power_dbm = 0,
+        .priority_peer_ip = peerIp,
+        .disco_heartbeat_ms = 0,
+        .stun_interval_ms = 0,
+        .ctrl_watchdog_ms = 0,
+    };
+    if (authKey[0] == '\0') {
+      LOG_INF("TAIL", "Starting with stored node identity (no enrollment key)");
+    }
+    client = microlink_init(&config);
+    if (!client || microlink_start(client) != ESP_OK) {
+      LOG_ERR("TAIL", "Could not start MicroLink");
+      shutdown();
+      return false;
+    }
+    priorityPeer = peerIp;
+
+    const unsigned long startedAt = millis();
+    while (!microlink_is_connected(client) && millis() - startedAt < CONNECT_TIMEOUT_MS) {
+      if (microlink_get_state(client) == ML_STATE_ERROR) break;
+      delay(250);
+    }
+    if (!microlink_is_connected(client)) {
+      LOG_ERR("TAIL", "Timed out connecting to tailnet");
+      shutdown();
+      return false;
+    }
+
+    if (connectionCount == 1 || connection == 1) {
+      LOG_INF("TAIL", "Connected as %s", microlink_default_device_name());
+      return true;
+    }
+    LOG_INF("TAIL", "Enrollment succeeded; reconnecting with stored node identity");
+    consumeAuthKey();
     shutdown();
-    return false;
   }
-  LOG_INF("TAIL", "Connected as %s", microlink_default_device_name());
-  return true;
+  return false;
 }
 #endif

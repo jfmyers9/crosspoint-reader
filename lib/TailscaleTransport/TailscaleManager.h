@@ -24,8 +24,18 @@ class TailscaleManager {
   TailscaleManager& operator=(const TailscaleManager&) = delete;
 
 #if defined(CROSSPOINT_ENABLE_TAILSCALE)
+  static constexpr size_t AUTH_KEY_CAPACITY = 96;
+  static constexpr char AUTH_KEY_PATH[] = "/.crosspoint/tailscale-auth.key";
+
+  enum class AuthKeyStatus : uint8_t { Missing, Loaded, Invalid };
+
   struct microlink_s* client = nullptr;
   uint32_t priorityPeer = 0;
+  char authKey[AUTH_KEY_CAPACITY] = {};
+  bool authKeyFromStorage = false;
+
+  AuthKeyStatus loadAuthKey();
+  void consumeAuthKey();
   bool start(uint32_t peerIp);
 #endif
 };
