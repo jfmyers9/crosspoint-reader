@@ -360,12 +360,6 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
 
   std::string url = UrlUtils::buildUrl(server.url, path);
   LOG_DBG("OPDS", "Fetching: %s", url.c_str());
-  if (!TAILSCALE.prepareUrl(url)) {
-    state = BrowserState::ERROR;
-    errorMessage = tr(STR_FETCH_FEED_FAILED);
-    requestUpdate();
-    return;
-  }
   OpdsParser parser;
   {
     OpdsParserStream stream{parser};
@@ -476,12 +470,6 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   // Build full download URL relative to the current feed, not the root server URL
   const std::string feedUrl = UrlUtils::buildUrl(server.url, currentPath);
   std::string downloadUrl = UrlUtils::buildUrl(feedUrl, book.href);
-  if (!TAILSCALE.prepareUrl(downloadUrl)) {
-    state = BrowserState::ERROR;
-    errorMessage = tr(STR_DOWNLOAD_FAILED);
-    requestUpdate();
-    return;
-  }
   // opdsDownloadFolder is already a null-terminated char[64]; use it directly —
   // no std::string copy. exists()/mkdir() take const char*.
   const char* folder = SETTINGS.opdsDownloadFolder;  // "" => SD root

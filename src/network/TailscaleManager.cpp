@@ -3,6 +3,9 @@
 #include <Arduino.h>
 #include <Logging.h>
 
+#include <cctype>
+#include <cstring>
+
 #if defined(CROSSPOINT_ENABLE_TAILSCALE)
 #include <WireGuardLwIP.h>
 #include <microlink.h>
@@ -17,11 +20,39 @@ namespace {
 constexpr uint32_t TAILNET_MASK = 0xFFC00000U;
 constexpr uint32_t TAILNET_PREFIX = 0x64400000U;
 constexpr uint32_t CONNECT_TIMEOUT_MS = 45000;
+constexpr size_t HOST_CAPACITY = 64;
 
 struct UrlPeer {
+  char host[HOST_CAPACITY] = {};
   uint32_t ip = 0;
   uint16_t port = 0;
+  bool magicDns = false;
 };
+
+bool hasMagicDnsSuffix(const char* host) {
+  if (!host) return false;
+  constexpr char SUFFIX[] = ".ts.net";
+  const size_t hostLen = strlen(host);
+  constexpr size_t SUFFIX_LEN = sizeof(SUFFIX) - 1;
+  if (hostLen <= SUFFIX_LEN) return false;
+  for (size_t i = 0; i < SUFFIX_LEN; ++i) {
+    const unsigned char c = static_cast<unsigned char>(host[hostLen - SUFFIX_LEN + i]);
+    if (tolower(c) != SUFFIX[i]) return false;
+  }
+  return true;
+}
+
+uint32_t parseTailnetIp(const char* host) {
+  uint32_t ip = 0;
+  unsigned int octets[4] = {};
+  char trailing = '\0';
+  if (sscanf(host, "%u.%u.%u.%u%c", &octets[0], &octets[1], &octets[2], &octets[3], &trailing) != 4) return 0;
+  for (const unsigned int octet : octets) {
+    if (octet > 255) return 0;
+    ip = (ip << 8) | octet;
+  }
+  return (ip & TAILNET_MASK) == TAILNET_PREFIX ? ip : 0;
+}
 
 UrlPeer parseTailnetPeer(const std::string& url) {
   const size_t schemeEnd = url.find("://");
@@ -33,20 +64,13 @@ UrlPeer parseTailnetPeer(const std::string& url) {
   const size_t authorityEnd = pathStart == std::string::npos ? url.size() : pathStart;
   const size_t colon = url.find(':', hostStart);
   const size_t hostEnd = colon != std::string::npos && colon < authorityEnd ? colon : authorityEnd;
-  if (hostEnd <= hostStart || hostEnd - hostStart >= 16) return {};
+  if (hostEnd <= hostStart || hostEnd - hostStart >= HOST_CAPACITY) return {};
 
-  char host[16] = {};
-  memcpy(host, url.data() + hostStart, hostEnd - hostStart);
-
-  uint32_t ip = 0;
-  unsigned int octets[4] = {};
-  char trailing = '\0';
-  if (sscanf(host, "%u.%u.%u.%u%c", &octets[0], &octets[1], &octets[2], &octets[3], &trailing) != 4) return {};
-  for (const unsigned int octet : octets) {
-    if (octet > 255) return {};
-    ip = (ip << 8) | octet;
-  }
-  if ((ip & TAILNET_MASK) != TAILNET_PREFIX) return {};
+  UrlPeer peer;
+  memcpy(peer.host, url.data() + hostStart, hostEnd - hostStart);
+  peer.ip = parseTailnetIp(peer.host);
+  peer.magicDns = hasMagicDnsSuffix(peer.host);
+  if (peer.ip == 0 && !peer.magicDns) return {};
 
   unsigned long port = https ? 443 : 80;
   if (hostEnd < authorityEnd) {
@@ -54,7 +78,8 @@ UrlPeer parseTailnetPeer(const std::string& url) {
     port = strtoul(url.c_str() + hostEnd + 1, &end, 10);
     if (end != url.c_str() + authorityEnd || port == 0 || port > UINT16_MAX) return {};
   }
-  return {ip, static_cast<uint16_t>(port)};
+  peer.port = static_cast<uint16_t>(port);
+  return peer;
 }
 }  // namespace
 
@@ -65,22 +90,47 @@ TailscaleManager& TailscaleManager::getInstance() {
 
 bool TailscaleManager::prepareUrl(const std::string& url) {
   const UrlPeer peer = parseTailnetPeer(url);
-  if (peer.ip == 0) return true;
+  if (peer.ip == 0 && !peer.magicDns) return true;
 
 #if !defined(CROSSPOINT_ENABLE_TAILSCALE)
   return true;
 #else
-  if (!start(peer.ip)) return false;
+  uint32_t resolvedIp = 0;
+  return prepareHost(peer.host, peer.port, resolvedIp);
+#endif
+}
 
-  auto* probe = microlink_tcp_connect(client, peer.ip, peer.port, CONNECT_TIMEOUT_MS);
+bool TailscaleManager::isMagicDnsUrl(const std::string& url) const { return parseTailnetPeer(url).magicDns; }
+
+#if defined(CROSSPOINT_ENABLE_TAILSCALE)
+bool TailscaleManager::isMagicDnsHost(const char* host) const { return hasMagicDnsSuffix(host); }
+
+bool TailscaleManager::prepareHost(const char* host, uint16_t port, uint32_t& peerIp) {
+  peerIp = parseTailnetIp(host);
+  const bool magicDns = hasMagicDnsSuffix(host);
+  if (peerIp == 0 && !magicDns) return false;
+  if (!start(peerIp)) return false;
+
+  if (magicDns) {
+    peerIp = microlink_resolve(client, host);
+    if (peerIp == 0) {
+      LOG_ERR("TAIL", "Could not resolve tailnet host: %s", host);
+      return false;
+    }
+    char peerIpText[16] = {};
+    microlink_ip_to_str(peerIp, peerIpText);
+    LOG_INF("TAIL", "Resolved %s to %s", host, peerIpText);
+  }
+
+  auto* probe = microlink_tcp_connect(client, peerIp, port, CONNECT_TIMEOUT_MS);
   if (!probe) {
     LOG_ERR("TAIL", "Could not establish peer tunnel");
     return false;
   }
   microlink_tcp_close(probe);
   return true;
-#endif
 }
+#endif
 
 void TailscaleManager::shutdown() {
 #if defined(CROSSPOINT_ENABLE_TAILSCALE)

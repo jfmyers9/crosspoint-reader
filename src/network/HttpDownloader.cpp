@@ -6,8 +6,16 @@
 #include <base64.h>
 #include <esp_wifi.h>
 
+#include <cctype>
 #include <functional>
 #include <string>
+#include <utility>
+
+#if defined(CROSSPOINT_ENABLE_TAILSCALE)
+#include <HTTPClient.h>
+
+#include "TailscaleManager.h"
+#endif
 
 #if defined(FREEINK_NET_WOLFSSL)
 #include <SecureHttpClient.h>
@@ -42,10 +50,6 @@ struct Sink {
   size_t downloaded = 0;
 };
 
-bool isRedirect(int status) {
-  return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
-}
-
 // OtaUpdater.cpp already disables WiFi power-save for firmware downloads, but
 // OPDS feed/book fetches never did despite being able to run just as long for
 // a large category. Modem sleep periodically powers the radio down between
@@ -62,6 +66,152 @@ struct WifiPowerSaveGuard {
     if (err != ESP_OK) LOG_ERR("HTTP", "Failed to restore WiFi power-save: %d", err);
   }
 };
+
+bool isRedirect(int status) {
+  return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+}
+
+#if defined(CROSSPOINT_ENABLE_TAILSCALE)
+bool sameOrigin(const std::string& left, const std::string& right) {
+  const auto originLength = [](const std::string& url) {
+    const size_t schemeEnd = url.find("://");
+    if (schemeEnd == std::string::npos) return size_t{0};
+    const size_t pathStart = url.find('/', schemeEnd + 3);
+    return pathStart == std::string::npos ? url.size() : pathStart;
+  };
+  const size_t leftLength = originLength(left);
+  const size_t rightLength = originLength(right);
+  if (leftLength == 0 || leftLength != rightLength) return false;
+  for (size_t i = 0; i < leftLength; ++i) {
+    if (tolower(static_cast<unsigned char>(left[i])) != tolower(static_cast<unsigned char>(right[i]))) return false;
+  }
+  return true;
+}
+
+class MagicDnsNetworkClient final : public NetworkClient {
+ public:
+  using NetworkClient::connect;
+
+  int connect(const char* host, uint16_t port) override { return connect(host, port, HTTP_TIMEOUT_MS); }
+
+  int connect(const char* host, uint16_t port, int32_t timeoutMs) override {
+    if (!TAILSCALE.isMagicDnsHost(host)) return NetworkClient::connect(host, port, timeoutMs);
+
+    uint32_t peerIp = 0;
+    if (!TAILSCALE.prepareHost(host, port, peerIp)) return 0;
+    const IPAddress address((peerIp >> 24) & 0xFF, (peerIp >> 16) & 0xFF, (peerIp >> 8) & 0xFF, peerIp & 0xFF);
+    return NetworkClient::connect(address, port, timeoutMs);
+  }
+};
+
+class HttpSinkStream final : public Stream {
+ public:
+  explicit HttpSinkStream(Sink& sink) : sink(sink) {}
+
+  size_t write(uint8_t value) override { return write(&value, 1); }
+  size_t write(const uint8_t* data, size_t len) override {
+    if (sink.cancelFlag && *sink.cancelFlag) {
+      aborted = true;
+      return 0;
+    }
+    if (!sink.write(data, len)) {
+      failed = true;
+      return 0;
+    }
+    sink.downloaded += len;
+    if (sink.progress && sink.total > 0) sink.progress(sink.downloaded, sink.total);
+    return len;
+  }
+
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  void flush() override {}
+
+  bool aborted = false;
+  bool failed = false;
+
+ private:
+  Sink& sink;
+};
+
+HttpDownloader::DownloadError runGetMagicDns(const std::string& url, const std::string& username,
+                                             const std::string& password, Sink& sink) {
+  if (url.compare(0, 7, "http://") != 0) {
+    LOG_ERR("HTTP", "Tailnet MagicDNS currently requires plain HTTP: %s", url.c_str());
+    return HttpDownloader::HTTP_ERROR;
+  }
+
+  // Keep the sizable HTTP transport objects off the activity task stack. Their
+  // internal buffers are allocated only for the duration of this request.
+  auto transport = makeUniqueNoThrow<MagicDnsNetworkClient>();
+  auto http = makeUniqueNoThrow<HTTPClient>();
+  if (!transport || !http) {
+    LOG_ERR("HTTP", "OOM: tailnet HTTP transport");
+    return HttpDownloader::HTTP_ERROR;
+  }
+
+  WifiPowerSaveGuard psGuard;
+  http->setConnectTimeout(HTTP_TIMEOUT_MS);
+  http->setTimeout(HTTP_TIMEOUT_MS);
+  http->setUserAgent("CrossPoint-ESP32-" CROSSPOINT_VERSION);
+  std::string activeUrl = url;
+  bool sendCredentials = true;
+  int status = 0;
+  for (int hop = 0;; ++hop) {
+    http->setAuthorization("");
+    if (sendCredentials && !username.empty() && !password.empty()) {
+      http->setAuthorization(username.c_str(), password.c_str());
+    }
+    if (!http->begin(*transport, activeUrl.c_str())) {
+      LOG_ERR("HTTP", "Bad tailnet URL: %s", activeUrl.c_str());
+      return HttpDownloader::HTTP_ERROR;
+    }
+
+    status = http->GET();
+    if (!isRedirect(status)) break;
+    if (hop >= MAX_REDIRECTS) {
+      LOG_ERR("HTTP", "Too many tailnet redirects");
+      http->end();
+      return HttpDownloader::HTTP_ERROR;
+    }
+
+    const String location = http->getLocation();
+    std::string nextUrl;
+    if (location.isEmpty() || !freeink::SecureHttpClient::resolveUrl(activeUrl, location.c_str(), nextUrl)) {
+      LOG_ERR("HTTP", "Bad tailnet redirect: %d", status);
+      http->end();
+      return HttpDownloader::HTTP_ERROR;
+    }
+    if (nextUrl.compare(0, 7, "http://") != 0) {
+      LOG_ERR("HTTP", "Tailnet redirect requires unsupported HTTPS transport");
+      http->end();
+      return HttpDownloader::HTTP_ERROR;
+    }
+    sendCredentials = sendCredentials && sameOrigin(activeUrl, nextUrl);
+    activeUrl = std::move(nextUrl);
+    http->end();
+  }
+  if (status != HTTP_CODE_OK) {
+    LOG_ERR("HTTP", "Tailnet request failed: %d", status);
+    http->end();
+    return HttpDownloader::HTTP_ERROR;
+  }
+
+  const int contentLength = http->getSize();
+  sink.total = contentLength > 0 ? static_cast<size_t>(contentLength) : 0;
+  HttpSinkStream output(sink);
+  const int written = http->writeToStream(&output);
+  http->end();
+  if (output.aborted) return HttpDownloader::ABORTED;
+  if (output.failed) return HttpDownloader::FILE_ERROR;
+  if (written < 0 || (sink.total > 0 && sink.downloaded != sink.total)) {
+    LOG_ERR("HTTP", "Incomplete tailnet response: got %zu of %zu bytes", sink.downloaded, sink.total);
+    return HttpDownloader::HTTP_ERROR;
+  }
+  return HttpDownloader::OK;
+}
+#endif
 
 #if defined(FREEINK_NET_WOLFSSL)
 HttpDownloader::DownloadError runGetWolf(const std::string& startUrl, const std::string& username,
@@ -242,6 +392,10 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
 // WiFiClient inside runGetWolf, so this is safe for non-TLS targets too.
 HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::string& username,
                                            const std::string& password, Sink& sink) {
+#if defined(CROSSPOINT_ENABLE_TAILSCALE)
+  if (TAILSCALE.isMagicDnsUrl(url)) return runGetMagicDns(url, username, password, sink);
+  if (!TAILSCALE.prepareUrl(url)) return HttpDownloader::HTTP_ERROR;
+#endif
 #if defined(FREEINK_NET_WOLFSSL)
   return runGetWolf(url, username, password, sink);
 #else
