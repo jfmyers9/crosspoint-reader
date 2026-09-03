@@ -3,6 +3,7 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <TailscaleManager.h>
 #include <WiFi.h>
 
 #include "KOReaderCredentialStore.h"
@@ -69,6 +70,7 @@ void KOReaderAuthActivity::onEnter() {
 }
 
 void KOReaderAuthActivity::onExit() {
+  TAILSCALE.shutdown();
   Activity::onExit();
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {

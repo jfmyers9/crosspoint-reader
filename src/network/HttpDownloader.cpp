@@ -13,8 +13,9 @@
 
 #if defined(CROSSPOINT_ENABLE_TAILSCALE)
 #include <HTTPClient.h>
+#include <TailscaleManager.h>
+#include <TailscaleNetworkClient.h>
 
-#include "TailscaleManager.h"
 #endif
 
 #if defined(FREEINK_NET_WOLFSSL)
@@ -88,22 +89,6 @@ bool sameOrigin(const std::string& left, const std::string& right) {
   return true;
 }
 
-class MagicDnsNetworkClient final : public NetworkClient {
- public:
-  using NetworkClient::connect;
-
-  int connect(const char* host, uint16_t port) override { return connect(host, port, HTTP_TIMEOUT_MS); }
-
-  int connect(const char* host, uint16_t port, int32_t timeoutMs) override {
-    if (!TAILSCALE.isMagicDnsHost(host)) return NetworkClient::connect(host, port, timeoutMs);
-
-    uint32_t peerIp = 0;
-    if (!TAILSCALE.prepareHost(host, port, peerIp)) return 0;
-    const IPAddress address((peerIp >> 24) & 0xFF, (peerIp >> 16) & 0xFF, (peerIp >> 8) & 0xFF, peerIp & 0xFF);
-    return NetworkClient::connect(address, port, timeoutMs);
-  }
-};
-
 class HttpSinkStream final : public Stream {
  public:
   explicit HttpSinkStream(Sink& sink) : sink(sink) {}
@@ -144,7 +129,7 @@ HttpDownloader::DownloadError runGetMagicDns(const std::string& url, const std::
 
   // Keep the sizable HTTP transport objects off the activity task stack. Their
   // internal buffers are allocated only for the duration of this request.
-  auto transport = makeUniqueNoThrow<MagicDnsNetworkClient>();
+  auto transport = makeUniqueNoThrow<TailscaleNetworkClient>();
   auto http = makeUniqueNoThrow<HTTPClient>();
   if (!transport || !http) {
     LOG_ERR("HTTP", "OOM: tailnet HTTP transport");

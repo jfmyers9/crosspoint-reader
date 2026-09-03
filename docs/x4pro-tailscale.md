@@ -1,8 +1,8 @@
-# X4 Pro Tailscale OPDS build
+# X4 Pro Tailscale BookOrbit build
 
 The `x4pro_tailscale` environment adds an experimental on-demand Tailscale
-transport for OPDS servers addressed by a direct `100.64.0.0/10` tailnet IP or
-fully qualified MagicDNS name.
+transport for OPDS and KOReader sync servers addressed by a direct
+`100.64.0.0/10` tailnet IP or fully qualified MagicDNS name.
 It uses the independent [MicroLink](https://github.com/CamM2325/microlink)
 client and is not affiliated with or supported by Tailscale.
 
@@ -46,8 +46,13 @@ inside WireGuard; the firmware establishes the peer tunnel before sending OPDS
 credentials. Restrict the tagged X4 Pro node to the BookOrbit host and port in
 the tailnet policy.
 
-Tailscale starts only while the OPDS browser is active and is stopped before
-CrossPoint tears down Wi-Fi. It cannot receive traffic while the reader sleeps.
+To use BookOrbit's KOReader progress sync, configure its fully qualified
+MagicDNS HTTP URL as the custom sync server. Authentication, account creation,
+progress download, and progress upload use the same on-demand tunnel.
+
+Tailscale starts only while the OPDS browser or KOReader sync activity is
+active and is stopped before CrossPoint tears down Wi-Fi. It cannot receive
+traffic while the reader sleeps.
 
 ## Hardware validation plan
 
@@ -69,20 +74,23 @@ CrossPoint tears down Wi-Fi. It cannot receive traffic while the reader sleeps.
    watchdog warnings, or allocation failures.
 4. Browse multiple catalog pages, run a search, and download a large EPUB.
    Open the downloaded book to verify the streamed file is complete.
-5. Leave the OPDS browser. Confirm MicroLink stops, Wi-Fi shuts down, and the
-   reader can sleep normally.
-6. Build and upload a keyless image, revoke the enrollment key, and power-cycle
+5. Configure the same MagicDNS host as the custom KOReader sync server. Verify
+   account authentication, progress download, and progress upload from a book.
+6. Leave the OPDS browser and KOReader sync screen. Confirm MicroLink stops,
+   Wi-Fi shuts down, and the reader can sleep normally.
+7. Build and upload a keyless image, revoke the enrollment key, and power-cycle
    the reader. Reopen BookOrbit and confirm the NVS-backed node identity
    reconnects without reenrollment.
-7. Repeat catalog and download tests on a second Wi-Fi network and after an
-   interrupted connection. Confirm recovery does not create duplicate tailnet
-   nodes or require a factory reset.
-8. Verify the tailnet policy denies the reader access to an unrelated peer and
+8. Repeat catalog, download, and progress-sync tests on a second Wi-Fi network
+   and after an interrupted connection. Confirm recovery does not create
+   duplicate tailnet nodes or require a factory reset.
+9. Verify the tailnet policy denies the reader access to an unrelated peer and
    port. Remove the enrollment binary after validation.
 
-Validation passes when feed navigation, search, and EPUB download work after a
-keyless cold boot; failures recover cleanly; unrelated tailnet access is
-denied; and leaving OPDS restores the normal sleep behavior.
+Validation passes when feed navigation, search, EPUB download, and KOReader
+progress sync work after a keyless cold boot; failures recover cleanly;
+unrelated tailnet access is denied; and leaving either network activity restores
+the normal sleep behavior.
 
 ## Current constraints
 

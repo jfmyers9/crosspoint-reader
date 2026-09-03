@@ -7,6 +7,7 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <OpdsStream.h>
+#include <TailscaleManager.h>
 #include <WiFi.h>
 
 #include "CrossPointSettings.h"
@@ -19,7 +20,6 @@
 #include "components/icons/search32.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
-#include "network/TailscaleManager.h"
 #include "util/BookCacheUtils.h"
 #include "util/OpdsFilename.h"
 #include "util/StringUtils.h"
