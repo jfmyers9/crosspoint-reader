@@ -8,26 +8,33 @@ client and is not affiliated with or supported by Tailscale.
 
 ## Configure
 
-Create a one-off, non-ephemeral Tailscale auth key restricted to an `x4pro`
-tag. A durable node is important because the reader spends most of its time
-offline. Pass the key only to the first Tailscale build, then flash the
-resulting enrollment binary:
+Create a one-off, non-ephemeral Tailscale auth key, preferably restricted to an
+`x4pro` tag. A durable node is important because the reader spends most of its
+time offline. Build and flash the normal Tailscale environment:
 
 ```sh
 git submodule update --init --recursive
-CROSSPOINT_TAILSCALE_AUTH_KEY='tskey-auth-REPLACE_ME' pio run -e x4pro_tailscale
+pio run -e x4pro_tailscale -t upload
 ```
 
-Open a tailnet OPDS catalog once to enroll the reader and persist its node
-identity in NVS. Then build and flash the same environment **without** the key
-and revoke the enrollment key:
+Use USB Drive mode to put the key in this file on the SD card:
 
-```sh
-pio run -e x4pro_tailscale
+```text
+/.crosspoint/tailscale-auth.key
 ```
 
-Do not distribute or keep using the enrollment binary. Erasing the reader's
-NVS removes its node identity and requires repeating enrollment.
+The file must contain only the `tskey-auth-...` value; one trailing newline is
+allowed. Safely eject the SD card, leave USB Drive mode, and open a tailnet OPDS
+catalog or authenticate the KOReader sync server. The firmware reads the key,
+enrolls the reader, persists its node identity in NVS, and deletes the key file
+after MicroLink reaches its connected state. It then reconnects with only the
+stored identity so its enrollment-key buffer can be cleared. Revoke the one-time
+auth key after confirming the reader appears in the Tailscale admin console.
+FAT/exFAT deletion does not securely erase old sectors, so revocation is still
+required.
+
+Erasing the reader's NVS removes its node identity and requires repeating
+enrollment.
 
 Configure the CrossPoint OPDS server with the BookOrbit host's fully qualified
 MagicDNS name:
@@ -59,12 +66,12 @@ traffic while the reader sleeps.
 1. Confirm BookOrbit is reachable from another tailnet client at its fully
    qualified MagicDNS URL, and restrict the `x4pro` tag to that host and TCP
    port in the tailnet policy.
-2. Connect the X4 Pro over USB. Build and upload the enrollment image with a
-   new one-off tagged key, without saving the key in a project file:
+2. Connect the X4 Pro over USB, build and upload the Tailscale image, then put a
+   new one-off tagged key at `/.crosspoint/tailscale-auth.key` through USB Drive
+   mode:
 
    ```sh
-   CROSSPOINT_TAILSCALE_AUTH_KEY='tskey-auth-REPLACE_ME' \
-     pio run -e x4pro_tailscale -t upload
+   pio run -e x4pro_tailscale -t upload
    pio device monitor -b 115200
    ```
 
@@ -78,19 +85,19 @@ traffic while the reader sleeps.
    account authentication, progress download, and progress upload from a book.
 6. Leave the OPDS browser and KOReader sync screen. Confirm MicroLink stops,
    Wi-Fi shuts down, and the reader can sleep normally.
-7. Build and upload a keyless image, revoke the enrollment key, and power-cycle
-   the reader. Reopen BookOrbit and confirm the NVS-backed node identity
-   reconnects without reenrollment.
+7. Confirm the firmware removed the SD key file, revoke the enrollment key, and
+   power-cycle the reader. Reopen BookOrbit and confirm the NVS-backed node
+   identity reconnects without reenrollment.
 8. Repeat catalog, download, and progress-sync tests on a second Wi-Fi network
    and after an interrupted connection. Confirm recovery does not create
    duplicate tailnet nodes or require a factory reset.
 9. Verify the tailnet policy denies the reader access to an unrelated peer and
-   port. Remove the enrollment binary after validation.
+   port. Confirm the enrollment key file remains absent.
 
 Validation passes when feed navigation, search, EPUB download, and KOReader
-progress sync work after a keyless cold boot; failures recover cleanly;
-unrelated tailnet access is denied; and leaving either network activity restores
-the normal sleep behavior.
+progress sync work after a cold boot without the SD enrollment key; failures
+recover cleanly; unrelated tailnet access is denied; and leaving either network
+activity restores the normal sleep behavior.
 
 ## Current constraints
 
@@ -99,5 +106,5 @@ the normal sleep behavior.
   subnet routes and short MagicDNS names are not enabled.
 - MagicDNS URLs currently require plain HTTP.
 - Hardware validation is required before treating this build as reliable.
-- The enrollment build compiles the auth key into its firmware image. Replace
-  it with a keyless build and revoke the key after enrollment succeeds.
+- SD deletion does not securely erase the enrollment key's old sectors; use a
+  one-time key and revoke it after enrollment succeeds.
