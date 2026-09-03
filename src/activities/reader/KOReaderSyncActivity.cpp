@@ -4,6 +4,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <TailscaleManager.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
 
@@ -358,6 +359,7 @@ void KOReaderSyncActivity::performUpload() {
   const auto result = KOReaderSyncClient::updateProgress(progress);
 
   // Drop the radio while user reads the result; full teardown happens at silent reboot.
+  TAILSCALE.shutdown();
   esp_wifi_stop();
 
   if (result != KOReaderSyncClient::OK) {
@@ -410,6 +412,7 @@ void KOReaderSyncActivity::onEnter() {
 }
 
 void KOReaderSyncActivity::onExit() {
+  TAILSCALE.shutdown();
   Activity::onExit();
 
   if (wifiActivated) {
