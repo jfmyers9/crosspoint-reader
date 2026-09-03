@@ -135,7 +135,6 @@ bool TailscaleManager::prepareHost(const char* host, uint16_t port, uint32_t& pe
 void TailscaleManager::shutdown() {
 #if defined(CROSSPOINT_ENABLE_TAILSCALE)
   if (!client) return;
-  microlink_stop(client);
   microlink_destroy(client);
   client = nullptr;
   priorityPeer = 0;
