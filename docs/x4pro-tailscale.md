@@ -1,7 +1,8 @@
 # X4 Pro Tailscale OPDS build
 
 The `x4pro_tailscale` environment adds an experimental on-demand Tailscale
-transport for OPDS servers addressed by a direct `100.64.0.0/10` tailnet IP.
+transport for OPDS servers addressed by a direct `100.64.0.0/10` tailnet IP or
+fully qualified MagicDNS name.
 It uses the independent [MicroLink](https://github.com/CamM2325/microlink)
 client and is not affiliated with or supported by Tailscale.
 
@@ -28,12 +29,17 @@ pio run -e x4pro_tailscale
 Do not distribute or keep using the enrollment binary. Erasing the reader's
 NVS removes its node identity and requires repeating enrollment.
 
-Configure the CrossPoint OPDS server with the Tailscale IPv4 address of the
-BookOrbit host, not a LAN subnet-router address or MagicDNS name:
+Configure the CrossPoint OPDS server with the BookOrbit host's fully qualified
+MagicDNS name:
 
 ```text
-http://100.x.y.z:3000/api/v1/opds
+http://olympus.tailNNNNNN.ts.net
 ```
+
+A direct tailnet IPv4 URL such as `http://100.x.y.z:3000/api/v1/opds` also
+works. Short MagicDNS names, subnet routes, and HTTPS MagicDNS URLs are not
+supported. Append the OPDS path and port when the BookOrbit deployment does
+not expose its catalog at the HTTP root.
 
 Use a dedicated BookOrbit OPDS username and password. The HTTP request travels
 inside WireGuard; the firmware establishes the peer tunnel before sending OPDS
@@ -45,9 +51,9 @@ CrossPoint tears down Wi-Fi. It cannot receive traffic while the reader sleeps.
 
 ## Hardware validation plan
 
-1. Confirm BookOrbit is reachable from another tailnet client at
-   `http://100.x.y.z:3000/api/v1/opds`, and restrict the `x4pro` tag to that
-   host and TCP port in the tailnet policy.
+1. Confirm BookOrbit is reachable from another tailnet client at its fully
+   qualified MagicDNS URL, and restrict the `x4pro` tag to that host and TCP
+   port in the tailnet policy.
 2. Connect the X4 Pro over USB. Build and upload the enrollment image with a
    new one-off tagged key, without saving the key in a project file:
 
@@ -57,10 +63,10 @@ CrossPoint tears down Wi-Fi. It cannot receive traffic while the reader sleeps.
    pio device monitor -b 115200
    ```
 
-3. Join Wi-Fi, configure the direct tailnet-IP OPDS URL and dedicated
-   BookOrbit credentials, then open the catalog. Confirm the serial log reports
-   tailnet connection and a WireGuard peer tunnel without resets, watchdog
-   warnings, or allocation failures.
+3. Join Wi-Fi, configure the MagicDNS OPDS URL and dedicated BookOrbit
+   credentials, then open the catalog. Confirm the serial log reports tailnet
+   connection, hostname resolution, and a WireGuard peer tunnel without resets,
+   watchdog warnings, or allocation failures.
 4. Browse multiple catalog pages, run a search, and download a large EPUB.
    Open the downloaded book to verify the streamed file is complete.
 5. Leave the OPDS browser. Confirm MicroLink stops, Wi-Fi shuts down, and the
@@ -81,7 +87,9 @@ denied; and leaving OPDS restores the normal sleep behavior.
 ## Current constraints
 
 - X4 Pro only.
-- Direct tailnet IPv4 peers only; subnet routes and MagicDNS are not enabled.
+- Direct tailnet IPv4 peers and fully qualified `.ts.net` MagicDNS names only;
+  subnet routes and short MagicDNS names are not enabled.
+- MagicDNS URLs currently require plain HTTP.
 - Hardware validation is required before treating this build as reliable.
 - The enrollment build compiles the auth key into its firmware image. Replace
   it with a keyless build and revoke the key after enrollment succeeds.
