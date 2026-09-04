@@ -17,6 +17,7 @@ namespace {
 constexpr uint32_t TAILNET_MASK = 0xFFC00000U;
 constexpr uint32_t TAILNET_PREFIX = 0x64400000U;
 constexpr uint32_t CONNECT_TIMEOUT_MS = 45000;
+constexpr uint32_t PEER_CONNECT_TIMEOUT_MS = 15000;
 constexpr size_t HOST_CAPACITY = 64;
 
 struct UrlPeer {
@@ -119,12 +120,10 @@ bool TailscaleManager::prepareHost(const char* host, uint16_t port, uint32_t& pe
     LOG_INF("TAIL", "Resolved %s to %s", host, peerIpText);
   }
 
-  auto* probe = microlink_tcp_connect(client, peerIp, port, CONNECT_TIMEOUT_MS);
-  if (!probe) {
+  if (microlink_prepare_peer(client, peerIp, PEER_CONNECT_TIMEOUT_MS) != ESP_OK) {
     LOG_ERR("TAIL", "Could not establish peer tunnel");
     return false;
   }
-  microlink_tcp_close(probe);
   return true;
 }
 #endif
