@@ -4,4 +4,4 @@
 	branch = main
 [submodule "third_party/microlink"]
 	path = third_party/microlink
-	url = https://github.com/CamM2325/microlink.git
+	url = https://github.com/jfmyers9/microlink.git
