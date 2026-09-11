@@ -57,6 +57,9 @@ class EpubReaderActivity final : public ReaderActivity {
   int idlePrewarmPage = -1;
   int idlePrewarmOffset = 0;
   unsigned long lastRenderCompleteMs = 0;
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+  unsigned long lastStatsCheckpointMs = 0;
+#endif
   bool bookmarkRemoved = false;
   std::vector<BookmarkEntry> cachedBookmarks;
   bool recentsEntryRemoved = false;
