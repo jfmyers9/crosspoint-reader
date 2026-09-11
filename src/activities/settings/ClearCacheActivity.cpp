@@ -115,8 +115,8 @@ void ClearCacheActivity::clearCache() {
     file.getName(name, sizeof(name));
     String itemName(name);
 
-    // Only delete directories matching known book cache names.
-    if (file.isDirectory() && isBookCacheDirectoryName(itemName.c_str())) {
+    // The library subtree contains only disposable browser previews.
+    if (file.isDirectory() && (isBookCacheDirectoryName(itemName.c_str()) || itemName == "library")) {
       String fullPath = "/.crosspoint/" + itemName;
       LOG_DBG("CLEAR_CACHE", "Removing cache: %s", fullPath.c_str());
 

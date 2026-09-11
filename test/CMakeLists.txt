@@ -82,7 +82,6 @@ add_subdirectory(http_header)
 add_subdirectory(txt_to_html)
 
 add_subdirectory(absolute_grayscale)
-
 add_subdirectory(sd_card_font)
 add_subdirectory(clipping_preview)
 add_subdirectory(glyph_bitmap)
@@ -107,3 +106,10 @@ add_test(NAME selection_buttons COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SO
 add_test(NAME list_viewport COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_list_viewport.py)
 add_test(NAME clipping_highlight_planes COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_clipping_highlight_planes.py)
 add_test(NAME clipping_selection_text COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_clipping_selection_text.py)
+
+add_subdirectory(library_book_details)
+add_subdirectory(library_cover_loader)
+add_subdirectory(reading_status)
+add_subdirectory(reading_status_format)
+add_subdirectory(library_layout_settings)
+add_subdirectory(library_opf_parser)
