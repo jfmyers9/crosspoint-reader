@@ -113,6 +113,10 @@ class KOReaderSyncClient {
    */
   static Error updateProgress(const KOReaderProgress& progress);
 
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+  static Error postExtension(const char* suffix, const std::string& payload, std::string& response);
+#endif
+
   /**
    * Get human-readable error message.
    */
