@@ -99,6 +99,7 @@ class HalFile : public Print {
   size_t fileSize();
   uint64_t fileSize64();
   uint32_t modificationTime();
+  bool getModifyDateTime(uint16_t* date, uint16_t* time);
   bool seek(size_t pos);
   bool seek64(uint64_t pos);
   bool seekCur(int64_t offset);

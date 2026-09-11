@@ -1,5 +1,8 @@
 #pragma once
 
+#include <Bitmap.h>
+#include <FreeInkApp.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -216,6 +219,18 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
                                  .capsuleRadius = 0};
 }
 
+// Activity-owned scratch: Bitmap's palette and card styles exceed the small task stack budget.
+struct LibraryCoverRenderer {
+  HalFile file;
+  Bitmap bitmap{file};
+  freeink::ui::BookCardProps card;
+  freeink::ui::ListProps viewport;
+  uint8_t outputRow[48]{};
+  uint8_t rawRow[24]{};
+  GfxRenderer* renderer = nullptr;
+  const char* coverPath = nullptr;
+};
+
 class BaseTheme {
  public:
   virtual ~BaseTheme() = default;
@@ -256,6 +271,12 @@ class BaseTheme {
   virtual void drawTextField(const GfxRenderer& renderer, Rect rect, const int textWidth, bool cursorMode = false,
                              int contentStartX = 0, int contentWidth = 0) const;
   virtual bool showsFileIcons() const { return false; }
+
+  static constexpr int LIBRARY_COVER_HEIGHT = 96;
+  int getLibraryRowHeight(freeink::ui::Screen<24>& screen) const;
+  void drawLibraryBookRow(freeink::ui::Screen<24>& screen, GfxRenderer& renderer, LibraryCoverRenderer& coverRenderer,
+                          const char* title, const char* author, const char* coverPath, UIIcon fallbackIcon,
+                          bool selected, int index, freeink::ui::ActionId action, int rowHeight) const;
 
   // Shared constants and helpers for battery drawing (used by all themes)
   static constexpr int batteryPercentSpacing = 4;

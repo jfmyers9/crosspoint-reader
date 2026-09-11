@@ -6,6 +6,7 @@
 #include <FontDecompressor.h>
 #include <HalGPIO.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <SdCardFont.h>
 #include <Utf8.h>
 
@@ -1460,6 +1461,27 @@ bool GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
 
 bool GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y, const int maxWidth,
                                  const int maxHeight) const {
+  const int outputRowSize = (bitmap.getWidth() + 3) / 4;
+  auto outputRow = makeUniqueNoThrow<uint8_t[]>(outputRowSize);
+  auto rawRow = makeUniqueNoThrow<uint8_t[]>(bitmap.getRowBytes());
+  if (!outputRow || !rawRow) {
+    LOG_ERR("GFX", "Failed to allocate 1-bit BMP row buffers");
+    return false;
+  }
+  return drawBitmap1Bit(bitmap, x, y, maxWidth, maxHeight, outputRow.get(), outputRowSize, rawRow.get(),
+                        bitmap.getRowBytes());
+}
+
+bool GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y, const int maxWidth,
+                                 const int maxHeight, uint8_t* outputRow, const size_t outputCapacity,
+                                 uint8_t* rowBytes, const size_t rawCapacity) const {
+  // readNextRow expands monochrome pixels to packed two-bit values.
+  if (!bitmap.is1Bit() || bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0 || !outputRow || !rowBytes ||
+      outputCapacity < (static_cast<size_t>(bitmap.getWidth()) + 3) / 4 ||
+      rawCapacity < static_cast<size_t>(bitmap.getRowBytes())) {
+    LOG_ERR("GFX", "Invalid 1-bit BMP or undersized row buffers");
+    return false;
+  }
   float scale = 1.0f;
   bool isScaled = false;
   if (maxWidth > 0 && bitmap.getWidth() > maxWidth) {
@@ -1471,24 +1493,10 @@ bool GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
     isScaled = true;
   }
 
-  // For 1-bit BMP, output is still 2-bit packed (for consistency with readNextRow)
-  const int outputRowSize = (bitmap.getWidth() + 3) / 4;
-  auto* outputRow = static_cast<uint8_t*>(malloc(outputRowSize));
-  auto* rowBytes = static_cast<uint8_t*>(malloc(bitmap.getRowBytes()));
-
-  if (!outputRow || !rowBytes) {
-    LOG_ERR("GFX", "!! Failed to allocate 1-bit BMP row buffers");
-    free(outputRow);
-    free(rowBytes);
-    return false;
-  }
-
   for (int bmpY = 0; bmpY < bitmap.getHeight(); bmpY++) {
     // Read rows sequentially using readNextRow
     if (bitmap.readNextRow(outputRow, rowBytes) != BmpReaderError::Ok) {
       LOG_ERR("GFX", "Failed to read row %d from 1-bit bitmap", bmpY);
-      free(outputRow);
-      free(rowBytes);
       return false;
     }
 
@@ -1522,9 +1530,6 @@ bool GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
       // White pixels (val == 3) are not drawn (leave background)
     }
   }
-
-  free(outputRow);
-  free(rowBytes);
 
   const int renderedWidth =
       isScaled ? static_cast<int>(std::floor((bitmap.getWidth() - 1) * scale)) + 1 : bitmap.getWidth();

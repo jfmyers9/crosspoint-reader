@@ -1,10 +1,16 @@
 #pragma once
 
+#include <array>
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "activities/UiListActivity.h"
+#include "util/LibraryBookDetails.h"
+
+class LibraryCoverRenderer;
+class OptionPopup;
 
 class FileBrowserActivity final : public UiListActivity {
  public:
@@ -36,6 +42,42 @@ class FileBrowserActivity final : public UiListActivity {
   // invalidates the cached rows on return instead of rendering stale ones.
   bool rowsUseFileIcons = false;
 
+  static constexpr int MAX_COVER_ROWS = 8;
+  struct CoverRow {
+    LibraryBookDetails details;
+    bool loaded = false;
+  };
+  std::array<CoverRow, MAX_COVER_ROWS> coverRows;
+  std::unique_ptr<LibraryCoverRenderer> coverRenderer;
+  std::unique_ptr<OptionPopup> optionsPopup;
+  int pendingOption = -1;
+  bool choosingView = false;
+  bool leaving = false;
+  bool coverAllocationFailed = false;
+  int coverTop = -1;
+  int coverCount = 0;
+  uint32_t folderGeneration = 0;
+  uint32_t pageChangedAt = 0;
+  uint32_t detailsRenderedAt = 0;
+  bool detailsDirty = false;
+  TaskHandle_t loaderTask = nullptr;
+  enum class LoadState { Idle, Working, Ready };
+  std::atomic<LoadState> loadState{LoadState::Idle};
+  std::atomic<bool> stopRequested{false};
+  std::atomic<bool> loaderStopped{false};
+  std::string loadPath;
+  LibraryBookDetails loadResult;
+  uint32_t loadGeneration = 0;
+  int loadIndex = -1;
+  bool loaderFailed = false;
+
+  bool coverView() const;
+  void buildCoverList(UiScreen& screen);
+  void serviceCoverLoader();
+  static void coverLoaderTask(void* context);
+  void stopCoverLoader();
+  void showOptions(bool viewOnly = false);
+
   void rebuildRowItems();
 
   int listCount() const override { return static_cast<int>(files.size()); }
@@ -61,6 +103,10 @@ class FileBrowserActivity final : public UiListActivity {
  public:
   explicit FileBrowserActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string initialPath = "/",
                                Mode mode = Mode::Books);
+  ~FileBrowserActivity() override;
   void onEnter() override;
   void onExit() override;
+  void loop() override;
+  bool preventAutoSleep() override { return loadState.load() == LoadState::Working; }
+  bool skipLoopDelay() override { return loadState.load() == LoadState::Working; }
 };

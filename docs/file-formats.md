@@ -1,6 +1,33 @@
 # File Formats
 
 These formats describe the SD-card cache files under `/.crosspoint/epub_<hash>/`.
+
+## Library preview cache (version 1)
+
+The cover-list browser stores disposable previews separately under
+`/.crosspoint/library/epub_<path-hash>/`. Each thumbnail height has a
+`details_<height>.bin` and, when available, a monochrome `thumb_<height>.bmp`.
+Reader progress, spine, TOC, and CSS caches are not created by the browser.
+
+The details header is 24 bytes, little-endian, in this order:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| sourceSize | u64 | Source EPUB size in bytes |
+| magic | u32 | `0x3144424c` (`LBD1`) |
+| date, time | u16 each | Source FAT modification date/time |
+| pathLength, titleLength, authorLength | u16 each | Following UTF-8 byte lengths |
+| hasCover | u8 | 0: absent/unsupported; 1: thumbnail available |
+| reserved | u8 | Must be zero |
+
+The source path, title, and author follow without terminators. Limits are 1024
+bytes for the path and 512 bytes each for title and author. Readers require an
+exact file length and matching source path, size, and timestamp. A changed
+source or invalid thumbnail rebuilds the preview. A same-size replacement
+preserving the FAT timestamp requires removing that book's library cache.
+Missing or unsupported covers are cached; extraction, SD, and decoder failures
+remain retryable. Previews currently support EPUB only. Oversized OPF documents
+(over 128 KiB) or guide cover wrappers (over 16 KiB) retain browser placeholders.
 All POD fields are written in the ESP32 little-endian representation used by
 `Serialization.h`; strings are length-prefixed UTF-8.
 
