@@ -11,6 +11,10 @@
 
 #include "KOReaderCredentialStore.h"
 
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+#include <BookOrbitStatsClient.h>
+#endif
+
 #if defined(CROSSPOINT_ENABLE_TAILSCALE)
 #include <HTTPClient.h>
 #include <Memory.h>
@@ -66,9 +70,36 @@ bool insufficientHeap() {
 
 bool requiresTls(const std::string& url) { return url.compare(0, 8, "https://") == 0; }
 
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+bool isBookOrbitUrl(const std::string& url) {
+  constexpr char SUFFIX[] = "/api/v1/koreader";
+  return url.size() >= sizeof(SUFFIX) - 1 &&
+         url.compare(url.size() - (sizeof(SUFFIX) - 1), sizeof(SUFFIX) - 1, SUFFIX) == 0;
+}
+#endif
+
 #if defined(CROSSPOINT_ENABLE_TAILSCALE)
+class BoundedResponseStream : public Stream {
+ public:
+  BoundedResponseStream(std::string& body, size_t limit) : body(body), limit(limit) {}
+  size_t write(uint8_t byte) override { return write(&byte, 1); }
+  size_t write(const uint8_t* bytes, size_t count) override {
+    if (count > limit - body.size()) return 0;
+    body.append(reinterpret_cast<const char*>(bytes), count);
+    return count;
+  }
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  void flush() override {}
+
+ private:
+  std::string& body;
+  size_t limit;
+};
+
 int sendMagicDnsRequest(const char* method, const std::string& url, const std::string& payload, bool withAuth,
-                        bool jsonBody, std::string* responseBody) {
+                        bool jsonBody, std::string* responseBody, size_t maxResponseBytes = 0) {
   if (url.compare(0, 7, "http://") != 0) {
     LOG_ERR("KOSync", "Tailnet MagicDNS currently requires plain HTTP: %s", url.c_str());
     return -1;
@@ -98,8 +129,19 @@ int sendMagicDnsRequest(const char* method, const std::string& url, const std::s
           ? http->GET()
           : http->sendRequest(method, reinterpret_cast<uint8_t*>(const_cast<char*>(payload.data())), payload.size());
   if (responseBody && httpCode > 0) {
-    const String body = http->getString();
-    responseBody->assign(body.c_str(), body.length());
+    if (maxResponseBytes > 0) {
+      responseBody->clear();
+      responseBody->reserve(maxResponseBytes);
+      BoundedResponseStream sink(*responseBody, maxResponseBytes);
+      if (http->writeToStream(&sink) < 0) {
+        LOG_ERR("KOSync", "Incomplete or oversized extension response");
+        http->end();
+        return -1;
+      }
+    } else {
+      const String body = http->getString();
+      responseBody->assign(body.c_str(), body.length());
+    }
   }
   http->end();
   return httpCode;
@@ -107,10 +149,10 @@ int sendMagicDnsRequest(const char* method, const std::string& url, const std::s
 #endif
 
 int sendSyncRequest(const char* method, const std::string& url, const std::string& payload, bool withAuth,
-                    bool jsonBody, std::string* responseBody = nullptr) {
+                    bool jsonBody, std::string* responseBody = nullptr, size_t maxResponseBytes = 0) {
 #if defined(CROSSPOINT_ENABLE_TAILSCALE)
   if (TAILSCALE.isMagicDnsUrl(url)) {
-    return sendMagicDnsRequest(method, url, payload, withAuth, jsonBody, responseBody);
+    return sendMagicDnsRequest(method, url, payload, withAuth, jsonBody, responseBody, maxResponseBytes);
   }
   if (!TAILSCALE.prepareUrl(url)) return -1;
 #endif
@@ -124,8 +166,24 @@ int sendSyncRequest(const char* method, const std::string& url, const std::strin
   http.addHeader("Accept", "application/vnd.koreader.v1+json");
   if (withAuth) applyAuthHeaders(http);
   if (jsonBody) http.addHeader("Content-Type", "application/json");
-  const int httpCode = strcmp(method, "GET") == 0 ? http.GET() : http.sendRequest(method, payload);
-  if (responseBody && httpCode > 0) *responseBody = http.getString();
+  int httpCode;
+  if (responseBody && maxResponseBytes > 0) {
+    responseBody->clear();
+    responseBody->reserve(maxResponseBytes);
+    httpCode = http.sendRequest(method, reinterpret_cast<const uint8_t*>(payload.data()), payload.size(),
+                                [&](const uint8_t* bytes, size_t count) {
+                                  if (count > maxResponseBytes - responseBody->size()) return false;
+                                  responseBody->append(reinterpret_cast<const char*>(bytes), count);
+                                  return true;
+                                });
+    if (!http.responseComplete()) {
+      LOG_ERR("KOSync", "Incomplete or oversized extension response");
+      httpCode = -1;
+    }
+  } else {
+    httpCode = strcmp(method, "GET") == 0 ? http.GET() : http.sendRequest(method, payload);
+    if (responseBody && httpCode > 0) *responseBody = http.getString();
+  }
   http.end();
   return httpCode;
 }
@@ -278,6 +336,16 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
   doc["percentage"] = progress.percentage;
   doc["device"] = DEVICE_NAME;
   doc["device_id"] = DEVICE_ID;
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+  if (isBookOrbitUrl(KOREADER_STORE.getBaseUrl())) {
+    const char* identity = BookOrbitStatsClient::deviceId();
+    if (!identity[0]) {
+      LOG_ERR("KOSync", "Device identity unavailable");
+      return SERVER_ERROR;
+    }
+    doc["device_id"] = identity;
+  }
+#endif
   if (progress.position.has_value() && KOREADER_STORE.usesCrossPointSyncServer()) {
     // CrossPoint-specific extension: do not send it to third-party KOSync servers.
     const auto& p = *progress.position;
@@ -310,6 +378,31 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
   if (httpCode == 401) return AUTH_FAILED;
   return SERVER_ERROR;
 }
+
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+KOReaderSyncClient::Error KOReaderSyncClient::postExtension(const char* suffix, const std::string& payload,
+                                                            std::string& response) {
+  lastHttpCode = 0;
+  response.clear();
+  if (!KOREADER_STORE.hasCredentials()) {
+    LOG_ERR("KOSync", "No extension credentials configured");
+    return NO_CREDENTIALS;
+  }
+  const std::string baseUrl = KOREADER_STORE.getBaseUrl();
+  if (!isBookOrbitUrl(baseUrl) || !suffix ||
+      (strcmp(suffix, "/plugin/page-stats") != 0 && strcmp(suffix, "/plugin/sweeps") != 0)) {
+    LOG_ERR("KOSync", "Unsupported statistics endpoint");
+    return SERVER_ERROR;
+  }
+  const std::string url = baseUrl + suffix;
+  if (requiresTls(url) && insufficientHeap()) return LOW_MEMORY;
+  lastHttpCode = sendSyncRequest("POST", url, payload, true, true, &response, 2048);
+  if (lastHttpCode <= 0) return NETWORK_ERROR;
+  if (lastHttpCode >= 200 && lastHttpCode < 300) return OK;
+  if (lastHttpCode == 401) return AUTH_FAILED;
+  return SERVER_ERROR;
+}
+#endif
 
 const char* KOReaderSyncClient::errorString(Error error) {
   switch (error) {

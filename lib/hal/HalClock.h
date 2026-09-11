@@ -27,6 +27,11 @@ class HalClock {
   // Returns false if RTC is not available.
   bool getTime(uint8_t& hour, uint8_t& minute) const;
 
+  // Read UTC Unix seconds from the RTC, without the display's cached-time fallback.
+  // Returns false for unavailable/unreliable RTC readings or dates outside 2024-2099.
+  // Leaves epochSeconds unchanged on failure.
+  bool getUtcTime(int64_t& epochSeconds) const;
+
   // Format time into a caller-provided buffer.
   // 24h mode produces "HH:MM" (needs >=6 bytes); 12h mode produces "H:MM AM"/"HH:MM PM" (needs >=9 bytes).
   // utcOffsetQuarterHoursBiased: biased quarter-hour offset (48 = UTC+0, 0 = UTC-12, 104 = UTC+14).

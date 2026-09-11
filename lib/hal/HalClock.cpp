@@ -39,6 +39,35 @@ bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
   return true;
 }
 
+bool HalClock::getUtcTime(int64_t& epochSeconds) const {
+  if (!_available) return false;
+
+  Rtc::DateTime dt{};
+  if (!_sdkRtc.now(dt)) return false;
+  if (dt.year < 2024 || dt.year > 2099 || dt.month < 1 || dt.month > 12 || dt.hour > 23 || dt.minute > 59 ||
+      dt.second > 59) {
+    return false;
+  }
+
+  static constexpr uint8_t MONTH_DAYS[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  const bool leapYear = dt.year % 4 == 0 && (dt.year % 100 != 0 || dt.year % 400 == 0);
+  const int daysInMonth = MONTH_DAYS[dt.month - 1] + (dt.month == 2 && leapYear ? 1 : 0);
+  if (dt.day < 1 || dt.day > daysInMonth) return false;
+
+  // Gregorian leap days before this year, relative to the Unix epoch.
+  const int previousYear = dt.year - 1;
+  const int leapDays =
+      previousYear / 4 - previousYear / 100 + previousYear / 400 - (1969 / 4 - 1969 / 100 + 1969 / 400);
+  int days = (dt.year - 1970) * 365 + leapDays + dt.day - 1;
+  for (int month = 1; month < dt.month; ++month) {
+    days += MONTH_DAYS[month - 1];
+  }
+  if (dt.month > 2 && leapYear) ++days;
+
+  epochSeconds = static_cast<int64_t>(days) * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second;
+  return true;
+}
+
 bool HalClock::formatTime(char* buf, size_t bufSize, uint8_t utcOffsetQuarterHoursBiased, bool use12Hour) const {
   if (bufSize < (use12Hour ? 9u : 6u)) return false;
   uint8_t h, m;
