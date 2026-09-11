@@ -2,6 +2,7 @@
 
 #include <BlePageTurner.h>
 #include <BoardConfig.h>
+#include <BookOrbitStats.h>
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <HalDisplay.h>
@@ -158,6 +159,7 @@ void ActivityManager::loop() {
     }
     if (pendingAction == PendingAction::Pop) {
       RenderLock lock;
+      BookOrbitStats::pause();
 
       if (!currentActivity) {
         // Should never happen in practice
@@ -206,6 +208,7 @@ void ActivityManager::loop() {
     } else if (pendingActivity) {
       // Current activity has requested a new activity to be launched
       RenderLock lock;
+      BookOrbitStats::pause();
 
       if (pendingAction == PendingAction::Replace || pendingAction == PendingAction::ReplaceForSleep) {
         // Destroy the current activity
