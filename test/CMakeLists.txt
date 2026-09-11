@@ -77,7 +77,6 @@ add_subdirectory(fs_helpers)
 add_subdirectory(txt_to_html)
 
 add_subdirectory(absolute_grayscale)
-
 add_subdirectory(sd_card_font)
 add_subdirectory(glyph_bitmap)
 
@@ -87,3 +86,9 @@ add_subdirectory(protected_paths)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_test(NAME TrustedTimeTimezone COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_trusted_time.py)
+add_subdirectory(library_book_details)
+add_subdirectory(library_cover_loader)
+add_subdirectory(reading_status)
+add_subdirectory(reading_status_format)
+add_subdirectory(library_layout_settings)
+add_subdirectory(library_opf_parser)

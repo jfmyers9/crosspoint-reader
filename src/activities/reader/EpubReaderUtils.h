@@ -3,6 +3,7 @@
 #include <Epub.h>
 #include <Epub/PageLink.h>
 #include <Logging.h>
+#include <ReadingStatus.h>
 
 #include <optional>
 #include <vector>
@@ -36,6 +37,12 @@ inline bool saveProgress(const Epub& epub, int spineIndex, int pageNumber, int p
   }
   if (!ProgressFile::writeAtomic(epub.getCachePath(), data, dataSize)) {
     return false;
+  }
+  if (pageCount > 0 && pageNumber < pageCount && spineIndex < epub.getSpineItemsCount() && epub.getBookSize() > 0) {
+    if (!ReadingStatus::update(epub.getPath(),
+                               epub.calculateProgress(spineIndex, static_cast<float>(pageNumber) / pageCount))) {
+      LOG_ERR("ERS", "Failed to save library reading status");
+    }
   }
   LOG_DBG("ERS", "Progress saved: spine=%d offset=%u page=%d", spineIndex, visibleTextOffset.value_or(0), pageNumber);
   return true;

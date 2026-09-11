@@ -22,6 +22,7 @@ bool isBookCacheDirectoryName(const char* name) {
 void clearBookCache(const std::string& path) {
   if (FsHelpers::hasReflowableBookExtension(path)) {
     Epub(path, "/.crosspoint").clearCache();
+    Epub(path, "/.crosspoint/library").clearCache();
   } else if (FsHelpers::hasXtcExtension(path)) {
     Xtc(path, "/.crosspoint").clearCache();
   } else {

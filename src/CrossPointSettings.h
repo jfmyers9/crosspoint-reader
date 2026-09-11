@@ -184,6 +184,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // UI Theme
   enum UI_THEME { CLASSIC = 0, LYRA = 1, LYRA_3_COVERS = 2, ROUNDEDRAFF = 3, COVER_GRID = 4 };
 
+  enum LIBRARY_LAYOUT { COMPACT_LIST = 0, COVER_LIST = 1, LIBRARY_LAYOUT_COUNT };
+
   // Image rendering in EPUB reader
   enum IMAGE_RENDERING { IMAGES_DISPLAY = 0, IMAGES_PLACEHOLDER = 1, IMAGES_SUPPRESS = 2, IMAGE_RENDERING_COUNT };
 
@@ -325,6 +327,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t longPressMenuFunction = LP_MENU_DISABLED;
   // UI Theme
   uint8_t uiTheme = LYRA;
+  uint8_t libraryLayout = COMPACT_LIST;
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
   // Power button return from footnotes (1 = enabled, 0 = disabled)

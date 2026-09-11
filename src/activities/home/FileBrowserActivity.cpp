@@ -5,6 +5,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
+#include <ReadingStatus.h>
 #include <Utf8.h>
 
 #include <algorithm>
@@ -16,6 +17,7 @@
 #include "RecentBooksStore.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
+#include "components/OptionPopup.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 #include "fontIds.h"
@@ -86,6 +88,8 @@ FileBrowserActivity::FileBrowserActivity(GfxRenderer& renderer, MappedInputManag
     : UiListActivity("FileBrowser", renderer, mappedInput, /*wantsTouchLongPress=*/true),
       mode(mode),
       basepath(initialPath.empty() ? "/" : std::move(initialPath)) {}
+
+FileBrowserActivity::~FileBrowserActivity() = default;
 
 void FileBrowserActivity::loadFiles() {
   files.clear();
@@ -229,6 +233,26 @@ void FileBrowserActivity::onExit() {
   Activity::onExit();
   files.clear();
   fileNameBuffer.reset();
+  optionsPopup.reset();
+}
+
+void FileBrowserActivity::showOptions() {
+  if (mode != Mode::Books || files.empty()) return;
+  RenderLock lock(*this);
+  app.clearTapFlash();
+  if (!optionsPopup) {
+    optionsPopup = makeUniqueNoThrow<OptionPopup>();
+    if (!optionsPopup) {
+      LOG_ERR("FileBrowser", "OOM: file options");
+      return;
+    }
+  }
+  static constexpr StrId actions[] = {StrId::STR_OPEN, StrId::STR_DELETE, StrId::STR_RENAME};
+  const bool canRename = nav.selected >= 0 && nav.selected < listCount() && files[nav.selected].back() != '/';
+  optionsPopup->show(StrId::STR_BROWSER_OPTIONS, actions, canRename ? 3 : 2, 0,
+                     [this](int option) { pendingOption = option; });
+  lock.unlock();
+  requestUpdate();
 }
 
 // To avoid traversing directories twice (once for cache clearing, once for deletion),
@@ -322,9 +346,10 @@ void FileBrowserActivity::activateIndex(const int index) {
 
 void FileBrowserActivity::onRowLongPress(const int index) {
   (void)index;  // base already synced nav.selected to the pressed row
+  // Clear the row flash before displaying the popup.
   app.clearTapFlash();
   if (mode == Mode::Books) {
-    showEntryActions();
+    showOptions();
   } else {
     activateSelected();
   }
@@ -367,28 +392,6 @@ void FileBrowserActivity::activateSelected() {
     lock.unlock();  // onSelectBook launches an activity; don't hold the lock across it
     onSelectBook(fullPath);
   }
-}
-
-void FileBrowserActivity::showEntryActions() {
-  if (mode != Mode::Books || files.empty() || optionPopup.isActive() || nav.selected < 0 ||
-      nav.selected >= listCount()) {
-    return;
-  }
-
-  const bool isDirectory = files[nav.selected].back() == '/';
-  static constexpr StrId FILE_OPTIONS[] = {StrId::STR_OPEN, StrId::STR_DELETE, StrId::STR_RENAME};
-  static constexpr StrId DIRECTORY_OPTIONS[] = {StrId::STR_OPEN, StrId::STR_DELETE};
-  optionPopup.show(StrId::STR_FILENAME, isDirectory ? DIRECTORY_OPTIONS : FILE_OPTIONS, isDirectory ? 2 : 3, 0,
-                   [this](const int index) {
-                     if (index == 0) {
-                       activateSelected();
-                     } else if (index == 1) {
-                       deleteSelected();
-                     } else if (index == 2) {
-                       startRename();
-                     }
-                   });
-  requestUpdate();
 }
 
 void FileBrowserActivity::deleteSelected() {
@@ -494,6 +497,7 @@ void FileBrowserActivity::renameSelectedFile(const std::string& oldPath, const s
   }
 
   RECENT_BOOKS.updatePath(oldPath, newPath, oldCachePath, newCachePath);
+  if (!ReadingStatus::move(oldPath, newPath)) LOG_ERR("FileBrowser", "Failed to move reading status");
   if (APP_STATE.openEpubPath == oldPath) {
     APP_STATE.openEpubPath = newPath;
     if (!APP_STATE.saveToFile()) LOG_ERR("FileBrowser", "Failed to save renamed open-book path");
@@ -509,8 +513,24 @@ void FileBrowserActivity::renameSelectedFile(const std::string& oldPath, const s
 }
 
 bool FileBrowserActivity::handleCustomInput() {
-  if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
-
+  if (optionsPopup && optionsPopup->isActive()) {
+    {
+      RenderLock lock(*this);
+      optionsPopup->handleInput(mappedInput, [this] { requestUpdate(); });
+    }
+    if (pendingOption >= 0) {
+      const int option = pendingOption;
+      pendingOption = -1;
+      if (option == 1) {
+        deleteSelected();
+      } else if (option == 2) {
+        startRename();
+      } else {
+        activateSelected();
+      }
+    }
+    return true;
+  }
   // Long press BACK (1s+) goes to root folder (Books mode only).
   // In firmware-pick mode we keep navigation simple: short Back = up dir / cancel.
   if (mode == Mode::Books && mappedInput.wasReleased(MappedInputManager::Button::Back) &&
@@ -534,12 +554,17 @@ bool FileBrowserActivity::handleCustomInput() {
 bool FileBrowserActivity::handleButtons() {
   if (mode == Mode::Books && mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, GO_HOME_MS)) {
     app.clearTapFlash();
-    showEntryActions();
+    showOptions();
     return true;
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    activateSelected();
+    if (mode == Mode::Books && mappedInput.getHeldTime() >= GO_HOME_MS) return true;
+    if (mode == Mode::Books && files.empty()) {
+      showOptions();
+    } else {
+      activateSelected();
+    }
     return true;
   }
 
@@ -579,11 +604,6 @@ bool FileBrowserActivity::handleButtons() {
   }
 
   return false;
-}
-
-void FileBrowserActivity::render(RenderLock&& lock) {
-  if (optionPopup.processRender(renderer, mappedInput)) return;
-  UiListActivity::render(std::move(lock));
 }
 
 std::string getFileExtension(const std::string& filename) {
@@ -649,8 +669,7 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   label.maxLines = 2;
   props.labelText = label;
 
-  // The trailing value here is just the short extension: skip the balanced
-  // 60%-band wrap cap and let both name lines run the full width before it.
+  // Keep both name lines available beside the extension.
   props.balanceWrappedLabelWithValue = false;
   syncListViewport(screen, props);
   // Prewarm the window at the final viewport (syncListViewport just applied
@@ -674,12 +693,20 @@ void FileBrowserActivity::drawChrome() {
 }
 
 void FileBrowserActivity::drawFooter() {
+  if (optionsPopup && optionsPopup->isActive()) {
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    optionsPopup->render(renderer);
+    return;
+  }
   const char* backLabel = (basepath == "/") ? (mode == Mode::PickFirmware ? tr(STR_BACK) : tr(STR_HOME)) : tr(STR_BACK);
   // In PickFirmware mode, Confirm on a .bin returns the path to the caller (not "open"); show
   // STR_SELECT instead. Directories in the same picker still descend, so keep STR_OPEN there.
   const bool selectingFirmwareFile = mode == Mode::PickFirmware && !files.empty() && nav.selected >= 0 &&
                                      nav.selected < listCount() && files[nav.selected].back() != '/';
-  const char* confirmLabel = files.empty() ? "" : (selectingFirmwareFile ? tr(STR_SELECT) : tr(STR_OPEN));
+  const char* confirmLabel = mode == Mode::Books && !files.empty()
+                                 ? tr(STR_OPEN_OPTIONS)
+                                 : (files.empty() ? "" : (selectingFirmwareFile ? tr(STR_SELECT) : tr(STR_OPEN)));
   const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, files.empty() ? "" : tr(STR_DIR_UP),
                                             files.empty() ? "" : tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
