@@ -1,5 +1,6 @@
 #include "KOReaderSyncActivity.h"
 
+#include <BookOrbitStats.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -133,6 +134,8 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
     statusMessage = tr(STR_CALC_HASH);
   }
   requestUpdate(true);
+
+  BookOrbitStats::sync();
 
   // KOSync requests from CrossPoint do not include a client timestamp.
   performSync();
