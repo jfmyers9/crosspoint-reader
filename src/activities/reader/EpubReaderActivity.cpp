@@ -1,5 +1,6 @@
 #include "EpubReaderActivity.h"
 
+#include <BookOrbitStats.h>
 #include <Epub/Page.h>
 #include <Epub/blocks/TextBlock.h>
 #include <FontCacheManager.h>
@@ -240,6 +241,12 @@ bool EpubReaderActivity::loadBook() {
   }
 
   loadCachedBookmarks();
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+  {
+    RenderLock lock;
+    BookOrbitStats::beginBook(bookPath);
+  }
+#endif
   return true;
 }
 
@@ -257,6 +264,12 @@ int EpubReaderActivity::bookPercentFor(const ChapterPosition& position) const {
 }
 
 void EpubReaderActivity::openReaderMenu() {
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+  {
+    RenderLock lock;
+    BookOrbitStats::pause();
+  }
+#endif
   pendingManualTurn = 0;
   if (usesToolbarMenu()) {
     // Reached from a child activity's result handler (footnotes, bookmarks,
@@ -339,6 +352,14 @@ void EpubReaderActivity::loop() {
     finish();
     return;
   }
+
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+  if (millis() - lastStatsCheckpointMs >= 30000UL && !RenderLock::peek()) {
+    RenderLock lock;
+    lastStatsCheckpointMs = millis();
+    BookOrbitStats::checkpoint();
+  }
+#endif
 
   // Someone else turned the screen while this reader was stacked (the control
   // center's orientation tile). Reflow before the next render, or the page
@@ -966,6 +987,7 @@ bool EpubReaderActivity::launchKOReaderSync() {
   }
 
   LOG_DBG("KOSync", "Releasing epub for sync (heap before: %u)", (unsigned)ESP.getFreeHeap());
+  BookOrbitStats::pause();
   {
     if (section) {
       nextPageNumber = section->currentPage;
@@ -1122,7 +1144,13 @@ bool EpubReaderActivity::skipLoopDelay() {
          (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD);
 }
 
+void EpubReaderActivity::render(RenderLock&& lock) {
+  if (isAtEndOfBook()) BookOrbitStats::pause();
+  ReaderActivity::render(std::move(lock));
+}
+
 void EpubReaderActivity::renderBook() {
+  BookOrbitStats::suspend();
   currentPageLinks.clear();
   if (!epub) return;
   // Runs under the render task's RenderLock; catches every requestUpdate()
@@ -1423,6 +1451,10 @@ void EpubReaderActivity::renderBook() {
     }
   }
 
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+  const bool statsPageVisible =
+      overlay == Overlay::None && !pendingSyncSaveError && !showBookmarkMessage && !showDictionaryMessage;
+#endif
   showPendingSyncSaveError();
 
   if (pendingScreenshot) {
@@ -1453,6 +1485,11 @@ void EpubReaderActivity::renderBook() {
     // through the sheet (see #2190 for the mechanism).
     pushOverlayRefresh();
   }
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+  if (statsPageVisible) {
+    BookOrbitStats::showPage(epub->calculateProgress(currentSpineIndex, chapterPosition().chapterFraction()));
+  }
+#endif
 }
 
 void EpubReaderActivity::onEndOfBookRendered() {
@@ -1931,6 +1968,12 @@ void EpubReaderActivity::settleOverlayRefresh() {
 
 void EpubReaderActivity::openOverlay(Overlay target) {
   mappedInput.resetHomeButtonInput();
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+  {
+    RenderLock lock;
+    BookOrbitStats::pause();
+  }
+#endif
   const Overlay previous = overlay;
   overlay = target;
   if (!toolbarUi) toolbarUi = std::make_unique<ReaderToolbarUi>(renderer);
@@ -2014,6 +2057,11 @@ void EpubReaderActivity::closeOverlayToPage() {
     renderer.restoreBwBuffer(/*resyncPanelBaseline=*/false);
     overlayPageStored = false;
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+    if (epub && section) {
+      BookOrbitStats::showPage(epub->calculateProgress(currentSpineIndex, chapterPosition().chapterFraction()));
+    }
+#endif
     return;
   }
   discardOverlayPage();
