@@ -5,7 +5,8 @@
 #include <vector>
 
 #include "activities/UiListActivity.h"
-#include "components/OptionPopup.h"
+
+class OptionPopup;
 
 class FileBrowserActivity final : public UiListActivity {
  public:
@@ -15,7 +16,6 @@ class FileBrowserActivity final : public UiListActivity {
  private:
   // File actions
   bool removeDirFile(const std::string& fullPath);
-  void showEntryActions();
   void startRename();
   void renameSelectedFile(const std::string& oldPath, const std::string& oldEntry, const std::string& newStem,
                           const std::string& extension);
@@ -27,7 +27,6 @@ class FileBrowserActivity final : public UiListActivity {
   std::string basepath = "/";
   std::vector<std::string> files;
   std::unique_ptr<char[]> fileNameBuffer;
-  OptionPopup optionPopup;
 
   // Pull-based rows: the SDK list resolves each drawn row on demand through
   // provideRow() (fui::ListProps::rowProvider), so the only per-file
@@ -41,13 +40,15 @@ class FileBrowserActivity final : public UiListActivity {
   char rowNameBuf[ROW_NAME_BUF_SIZE]{};
   char rowExtBuf[16]{};
   static void provideRow(void* ctx, uint16_t index, freeink::ui::ListItem& item);
-
   // CJK fallback glyphs are prewarmed for a bounded window of rows around the
   // viewport (one SD pass per list page, like the reader TOC) instead of the
   // whole folder. -1 = nothing prewarmed; reset by loadFiles().
   static constexpr int PREWARM_WINDOW = 24;
   int prewarmedStart = -1;
   void prewarmRowGlyphs(int start);
+  std::unique_ptr<OptionPopup> optionsPopup;
+  int pendingOption = -1;
+  void showOptions();
 
   int listCount() const override { return static_cast<int>(files.size()); }
   void buildScreen(UiScreen& screen) override;
@@ -70,7 +71,7 @@ class FileBrowserActivity final : public UiListActivity {
  public:
   explicit FileBrowserActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string initialPath = "/",
                                Mode mode = Mode::Books);
+  ~FileBrowserActivity() override;
   void onEnter() override;
   void onExit() override;
-  void render(RenderLock&& lock) override;
 };

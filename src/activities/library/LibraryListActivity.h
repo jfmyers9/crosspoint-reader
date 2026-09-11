@@ -1,6 +1,7 @@
 #pragma once
 
 #include <LibraryIndexFile.h>
+#include <ReadingStatus.h>
 
 #include <cstdint>
 #include <memory>
@@ -10,6 +11,8 @@
 #include "RecentBooksStore.h"
 #include "activities/UiTabListActivity.h"
 #include "components/OptionPopup.h"
+
+class OptionPopup;
 
 // One Library screen: every indexed book on the card shown by recency, title,
 // or author. The Recent shelf orders by file modification time (when a book
@@ -32,9 +35,13 @@
 class LibraryListActivity final : public UiTabListActivity {
  public:
   LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
+  ~LibraryListActivity() override;
 
   void onEnter() override;
   void onExit() override;
+  void loop() override;
+  bool preventAutoSleep() override;
+  bool skipLoopDelay() override;
 
  protected:
   // --- UiListActivity / UiTabListActivity contract ---------------------------
@@ -59,6 +66,27 @@ class LibraryListActivity final : public UiTabListActivity {
   void render(RenderLock&& lock) override;
 
  private:
+  struct CoverState;
+  std::unique_ptr<CoverState> covers;
+  bool leaving = false;
+  std::unique_ptr<OptionPopup> optionsPopup;
+  int pendingOption = -1;
+  int optionsEntry = -1;
+  void showBookOptions(int entry);
+  void applyContextOption(int entry);
+  struct StatusRow {
+    std::string path;
+    ReadingStatus::Status status;
+    char label[32] = {};
+  };
+  // A reusable page of status values and paths, not a library-wide cache.
+  std::vector<StatusRow> statusRows;
+  std::string statusPath;
+  const ReadingStatus::Status& statusFor(int entry, int slot);
+  void buildCoverRows(UiScreen& screen);
+  void serviceCovers();
+  void stopCovers();
+  bool pathFor(int entry, std::string& path);
   // The screen's own actions, after the base's ACTION_ROW / ACTION_TAB.
   static constexpr freeink::ui::ActionId ACTION_SEARCH = ACTION_TAB_USER;
   static constexpr freeink::ui::ActionId ACTION_REBUILD = ACTION_SEARCH + 1;
@@ -79,8 +107,7 @@ class LibraryListActivity final : public UiTabListActivity {
   // Recent-row long-press menu: open / remove from recents / delete / rebuild.
   void showRecentBookOptions(int entry);
   void promptRemoveRecentBook(const std::string& path, const std::string& title);
-  // Long-press delete owns the gesture where grouping does not apply: the
-  // Recent sort, degraded lists, and any active search result.
+  // Offer delete where grouping does not apply: Recent, degraded, and search.
   bool deleteEligible() const;
   // Resolves the row's path and title, then confirms via promptDeleteBookByPath.
   void promptDeleteBook(int entry);
