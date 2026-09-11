@@ -113,3 +113,9 @@ add_test(NAME clipping_highlight_planes COMMAND ${Python3_EXECUTABLE} ${CMAKE_CU
 add_test(NAME clipping_selection_text COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_clipping_selection_text.py)
 
 add_test(NAME recursive_dictionary COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_recursive_dictionary.py)
+add_subdirectory(library_book_details)
+add_subdirectory(library_cover_loader)
+add_subdirectory(reading_status)
+add_subdirectory(reading_status_format)
+add_subdirectory(library_layout_settings)
+add_subdirectory(library_opf_parser)
