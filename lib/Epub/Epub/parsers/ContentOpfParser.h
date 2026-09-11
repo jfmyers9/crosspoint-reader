@@ -33,6 +33,8 @@ class ContentOpfParser final : public Print {
   ParserState state = START;
   BookMetadataCache* cache;
   const bool metadataOnly;
+  // Continue through manifest and guide for previews without writing reader caches.
+  const bool includeCoverMetadata;
   bool metadataComplete = false;
   HalFile tempItemStore;
   std::string coverItemId;
@@ -98,12 +100,14 @@ class ContentOpfParser final : public Print {
   std::vector<std::string> cssFiles;  // CSS stylesheet paths
 
   explicit ContentOpfParser(const std::string& cachePath, const std::string& baseContentPath, const size_t xmlSize,
-                            BookMetadataCache* cache, const bool metadataOnly = false)
+                            BookMetadataCache* cache, const bool metadataOnly = false,
+                            const bool includeCoverMetadata = false)
       : cachePath(cachePath),
         baseContentPath(baseContentPath),
         remainingSize(xmlSize),
         cache(cache),
-        metadataOnly(metadataOnly) {}
+        metadataOnly(metadataOnly),
+        includeCoverMetadata(includeCoverMetadata) {}
   ~ContentOpfParser() override;
 
   bool setup();

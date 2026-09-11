@@ -10,6 +10,7 @@ class RenderLock {
   enum class Mode { Blocking, Try };
   explicit RenderLock(Mode mode = Mode::Blocking);
   explicit RenderLock(Activity&);  // Activity argument retained for compatibility.
+  explicit operator bool() const { return isLocked; }
   RenderLock(const RenderLock&) = delete;
   RenderLock& operator=(const RenderLock&) = delete;
   ~RenderLock();
