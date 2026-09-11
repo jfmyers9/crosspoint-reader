@@ -1,6 +1,65 @@
 # File Formats
 
-These formats describe the SD-card cache files under `/.crosspoint/epub_<hash>/`.
+These formats describe SD-card records under `/.crosspoint/`.
+
+## Reading status (version 1)
+
+`reading-status/<64-bit-FNV-1a-path-hash>.bin` stores durable reading state,
+independently of disposable EPUB and library caches. Removing all of
+`/.crosspoint/` also removes these records.
+
+The eight-byte header contains `R`, `S`, version `1`, state (`1` unread,
+`2` reading, `3` finished), integer percentage, reserved zero, then a
+little-endian u16 source-path byte length. The full UTF-8 source path follows
+without a terminator; its length and contents must match on read. Missing,
+truncated, or invalid records mean unknown, never unread. Unread uses 0%,
+reading uses 0–99%, and finished uses 100%.
+
+Writes skip unchanged values. A complete `.tmp` is flushed and closed before
+replacement; the previous `.bin` is renamed to `.bak` first, so readers can
+recover it if replacement is interrupted. FAT directory operations are not
+transactional. Finished is sticky until manually marked unread. Reader saves
+update percentage only with a valid chapter page count; applying remote sync
+uses its known fraction directly. Reaching the end-of-book screen marks finished.
+Moving a finished book to `/Read` transfers this record to its new path.
+
+Library displays missing or invalid status as **No saved progress** in both layouts.
+Browse Files does not display or edit reading status.
+
+## Library layout setting
+
+`settings.json` stores `libraryLayout` as `0` (compact) or `1` (covers).
+When that key is absent, the former `libraryCoverView` boolean or numeric
+`0`/`1` value is migrated. Invalid values fall back to compact. The old
+`libraryView` key belonged to Browse Files and is ignored, not migrated to
+Library. Retired keys are removed when settings are resaved.
+
+## Library preview cache (version 1)
+
+The Library cover list stores disposable previews separately under
+`/.crosspoint/library/epub_<path-hash>/`. Each thumbnail height has a
+`details_<height>.bin` and, when available, a monochrome `thumb_<height>.bmp`.
+Reader progress, spine, TOC, and CSS caches are not created by the preview loader.
+
+The details header is 24 bytes, little-endian, in this order:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| sourceSize | u64 | Source EPUB size in bytes |
+| magic | u32 | `0x3144424c` (`LBD1`) |
+| date, time | u16 each | Source FAT modification date/time |
+| pathLength, titleLength, authorLength | u16 each | Following UTF-8 byte lengths |
+| hasCover | u8 | 0: absent/unsupported; 1: thumbnail available |
+| reserved | u8 | Must be zero |
+
+The source path, title, and author follow without terminators. Limits are 1024
+bytes for the path and 512 bytes each for title and author. Readers require an
+exact file length and matching source path, size, and timestamp. A changed
+source or invalid thumbnail rebuilds the preview. A same-size replacement
+preserving the FAT timestamp requires removing that book's library cache.
+Missing or unsupported covers are cached; extraction, SD, and decoder failures
+remain retryable. Previews currently support EPUB only. Oversized OPF documents
+(over 128 KiB) or guide cover wrappers (over 16 KiB) retain Library placeholders.
 All POD fields are written in the ESP32 little-endian representation used by
 `Serialization.h`; strings are length-prefixed UTF-8.
 

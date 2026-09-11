@@ -5,6 +5,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
+#include <ReadingStatus.h>
 #include <Utf8.h>
 
 #include <algorithm>
@@ -513,6 +514,7 @@ void FileBrowserActivity::renameSelectedFile(const std::string& oldPath, const s
 
   sleepImageChanged(newPath.c_str());
   RECENT_BOOKS.updatePath(oldPath, newPath, oldCachePath, newCachePath);
+  if (!ReadingStatus::move(oldPath, newPath)) LOG_ERR("FileBrowser", "Failed to move reading status");
   if (APP_STATE.openEpubPath == oldPath) {
     APP_STATE.openEpubPath = newPath;
     if (!APP_STATE.saveToFile()) LOG_ERR("FileBrowser", "Failed to save renamed open-book path");
@@ -668,8 +670,7 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   label.maxLines = 2;
   props.labelText = label;
 
-  // The trailing value here is just the short extension: skip the balanced
-  // 60%-band wrap cap and let both name lines run the full width before it.
+  // Keep both name lines available beside the extension.
   props.balanceWrappedLabelWithValue = false;
   syncListViewport(screen, props);
   // Prewarm the window at the final viewport (syncListViewport just applied
@@ -701,7 +702,9 @@ void FileBrowserActivity::drawFooter() {
   // STR_SELECT instead. Directories in the same picker still descend, so keep STR_OPEN there.
   const bool selectingFirmwareFile = mode == Mode::PickFirmware && !files.empty() && nav.selected >= 0 &&
                                      nav.selected < listCount() && files[nav.selected].back() != '/';
-  const char* confirmLabel = files.empty() ? "" : (selectingFirmwareFile ? tr(STR_SELECT) : tr(STR_OPEN));
+  const char* confirmLabel = mode == Mode::Books && !files.empty()
+                                 ? tr(STR_OPEN_OPTIONS)
+                                 : (files.empty() ? "" : (selectingFirmwareFile ? tr(STR_SELECT) : tr(STR_OPEN)));
   const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, files.empty() ? "" : tr(STR_DIR_UP),
                                             files.empty() ? "" : tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

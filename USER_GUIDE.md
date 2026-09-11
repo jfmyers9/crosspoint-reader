@@ -123,7 +123,7 @@ The Browse Files screen acts as a file and folder browser. The full path to the 
 
 * **Navigate List:** Use **Left** (or **Side Up**), or **Right** (or **Side Down**) to move the selection cursor up and down through folders and books. You can also long-press these buttons to scroll a full page up or down.
 * **Open Selection:** Press **Confirm** to open a folder or start reading a selected book. Selecting a `.bmp` file will open the image viewer.
-* **Delete Files or Folders:** Hold and release **Confirm** to delete the selected file or folder. You will be given an option to either confirm or cancel. Multiple files can be selected for deletion in a single operation.
+* **File Options:** Hold **Confirm** for one second and release, or long-press a row on a touch device, to open **Open** and **Delete** options. **Delete** asks for confirmation before removing the selected file or folder. Browse Files always uses a plain list; covers and reading status are available in **Library**.
 * **Rename or Move:** Files can be renamed or moved to a different folder from within the browse screen.
 
 ### 3.4 Library Screen
@@ -136,16 +136,22 @@ The Library indexes up to 4,096 supported books on the SD card and shows their t
 
 `My Clippings.txt` and `crash_report.txt` are not listed in the Library. They remain available in the file browser.
 
+Choose **Settings → Display → Library layout → Cover list** for covers, titles, authors, and reading status in the Library. **Compact list** is the default and shows reading status without artwork. Titles and authors come from the Library index; visible EPUB thumbnails load in the background and are cached on the SD card. Missing or unsupported covers use placeholders. Navigation remains available while covers load; opening a book or leaving Library may briefly wait for an in-progress decode to finish safely. **Clear cache** removes these previews. Sorting, search, and grouping keep working; collapsed groups remain compact lists. An existing **Library covers** preference is preserved when upgrading; the former **File browser view** preference is retired.
+
+Book rows in both Library layouts show saved reading status: **Unread**, a percentage, or **Finished**. Cover rows include a progress bar when progress is known. **No saved progress** means no reliable status has been recorded, including older books not yet read with this firmware; it does not mean unread. EPUB reading and applied KOReader sync positions update the status. Reaching the end marks the book finished; opening it again does not clear that flag.
+
+Hold a book row to open its options and choose **Mark finished** or **Mark unread**. Mark unread clears the finished flag without resetting the saved reading position; continuing to read updates the percentage again. Status is stored separately from rendering caches, so clearing those caches does not erase it.
+
 On a button-only device:
 
 - Use **Up/Down** or **Left/Right** to move one row at a time. Hold a direction to move a page at a time.
 - Press **Confirm** to open the selected book.
 - Press **Back** from the book list to focus the tabs. While the tabs are focused, press **Confirm** to switch to the next tab, hold **Confirm** to reverse the sort direction, press **Up** to open Search, or press **Down** to return to the list.
-- In the Recent view, hold **Confirm** on a book to open its options: **Open**, **Remove from Recents** (opened books only), **Delete**, and **Refresh Library**.
-- In the Title or Author views, hold **Confirm** on a book to collapse the list to its letter or author groups. The matching group remains selected. Press **Confirm** to enter a group, or **Back** to restore the exact book and position you came from.
-- While a search is active in the Title or Author views, hold **Confirm** on a book to delete it. Press **Back** to clear the search.
+- In the Recent view, hold **Confirm** on a book to open its options, including reading status (**Mark finished** / **Mark unread**), **Open**, **Remove from Recents** (opened books only), **Delete**, and **Refresh Library**.
+- In the Title or Author views, hold **Confirm** on a book to open its options (including reading status and **Collapse groups** to show its letter or author groups). The matching group remains selected. Press **Confirm** to enter a group, or **Back** to restore the exact book and position you came from.
+- While a search is active in the Title or Author views, hold **Confirm** on a book to open its options (including reading status and **Delete**). Press **Back** to clear the search.
 
-On a touch device, tap tabs, books, and the Search icon directly. Tap the active tab again to reverse its sort direction. Swipe up or down to scroll. Long-press a book in the Recent view to open its options. Long-press a book in a Title or Author view to collapse to the group list, then tap a group to expand it. Swipe a row sideways to reveal a delete button. Tap the refresh icon in the header to rebuild the index.
+On a touch device, tap tabs, books, and the Search icon directly. Tap the active tab again to reverse its sort direction. Swipe up or down to scroll. Long-press a book to open its options, including reading status and the available remove, delete, or collapse action. Tap a collapsed group to expand it. Swipe a row sideways to reveal a delete button. Tap the refresh icon in the header to rebuild the index.
 
 The index is created automatically the first time the Library is opened, and it is rebuilt after books are added through file transfer. To pick up other file changes or updated metadata, choose **Refresh Library** from a Recent book's options, or tap the refresh icon on a touch device. **Settings → Library → Refresh Library** does the same from any device, including when the Library shows no books. The **Use Book Metadata** setting controls whether the index reads titles and authors stored inside books.
 
@@ -254,6 +260,8 @@ Settings are grouped into **System**, **Display**, **Reader**, **Controls**, **L
   - "Always" - Always hide battery percentage
 
 - **Refresh Frequency**: Set how often the screen does a full refresh while reading to reduce ghosting; options are every 1, 5, 10, 15, or 30 pages.
+
+- **Library layout**: Choose **Compact list** (default) or **Cover list** for Library. Both show reading status; Cover list also shows artwork. Browse Files remains a plain file/folder list.
 
 - **UI Theme**: Set which UI theme to use:
   
