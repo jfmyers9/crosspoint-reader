@@ -12,6 +12,7 @@
 #include <string>
 
 #include "I18nKeys.h"
+#include "LibraryLayoutSettings.h"
 #include "ReaderFontSizes.h"
 #include "SettingsList.h"
 #include "fontIds.h"
@@ -216,6 +217,8 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
       needsResave = true;
     }
   }
+
+  libraryLayout = readLibraryLayout(doc, needsResave);
 
   if (doc["sleepTimeoutMinutes"].isNull() && !doc["sleepTimeout"].isNull()) {
     const uint8_t legacyValue =
