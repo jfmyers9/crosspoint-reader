@@ -50,8 +50,12 @@ bool Epub::findContentOpfFile(std::string* contentOpfFile, ZipFile* sharedZip) c
   return true;
 }
 
+bool Epub::readLibraryMetadata(BookMetadataCache::BookMetadata& metadata) {
+  return parseContentOpf(metadata, false, true, nullptr, true);
+}
+
 bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const bool writeSpineEntries,
-                           const bool metadataOnly, ZipFile* sharedZip) {
+                           const bool metadataOnly, ZipFile* sharedZip, const bool includeCoverMetadata) {
   std::string contentOpfFilePath;
   if (!findContentOpfFile(&contentOpfFilePath, sharedZip)) {
     LOG_ERR("EBP", "Could not find content.opf in zip");
@@ -70,15 +74,23 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
     return false;
   }
 
-  ContentOpfParser opfParser(getCachePath(), getBasePath(), contentOpfSize,
-                             writeSpineEntries ? bookMetadataCache.get() : nullptr, metadataOnly);
-  if (!opfParser.setup()) {
+  if (includeCoverMetadata && contentOpfSize > 128 * 1024) {
+    LOG_ERR("EBP", "OPF exceeds library preview limit");
+    return false;
+  }
+  // The parser exceeds the task's local-variable budget; release it after this single book.
+  auto parser = makeUniqueNoThrow<ContentOpfParser>(getCachePath(), getBasePath(), contentOpfSize,
+                                                    writeSpineEntries ? bookMetadataCache.get() : nullptr, metadataOnly,
+                                                    includeCoverMetadata);
+  if (!parser || !parser->setup()) {
     LOG_ERR("EBP", "Could not setup content.opf parser");
     return false;
   }
+  auto& opfParser = *parser;
 
-  const bool read = sharedZip ? sharedZip->readFileToStream(contentOpfFilePath.c_str(), opfParser, 1024, metadataOnly)
-                              : readItemContentsToStream(contentOpfFilePath, opfParser, 1024, metadataOnly);
+  const bool allowEarlyStop = metadataOnly && !includeCoverMetadata;
+  const bool read = sharedZip ? sharedZip->readFileToStream(contentOpfFilePath.c_str(), opfParser, 1024, allowEarlyStop)
+                              : readItemContentsToStream(contentOpfFilePath, opfParser, 1024, allowEarlyStop);
   if (!read) {
     LOG_ERR("EBP", "Could not read content.opf");
     return false;
@@ -90,7 +102,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   bookMetadata.author = utf8ComposeNfc(opfParser.author);
   bookMetadata.language = opfParser.language;
 
-  if (metadataOnly) {
+  if (metadataOnly && !includeCoverMetadata) {
     LOG_DBG("EBP", "Successfully parsed package metadata");
     return true;
   }
@@ -102,7 +114,15 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   if (bookMetadata.coverItemHref.empty() && !opfParser.guideCoverPageHref.empty()) {
     LOG_DBG("EBP", "No cover from metadata, trying guide cover page: %s", opfParser.guideCoverPageHref.c_str());
     size_t coverPageSize;
+    if (metadataOnly && (!getItemSize(opfParser.guideCoverPageHref, &coverPageSize) || coverPageSize > 16 * 1024)) {
+      LOG_ERR("EBP", "Cover wrapper unavailable or exceeds library preview limit");
+      return false;
+    }
     uint8_t* coverPageData = readItemContentsToBytes(opfParser.guideCoverPageHref, &coverPageSize, true);
+    if (metadataOnly && !coverPageData) {
+      LOG_ERR("EBP", "Could not read library cover wrapper");
+      return false;
+    }
     if (coverPageData) {
       const std::string coverPageHtml(reinterpret_cast<char*>(coverPageData), coverPageSize);
       free(coverPageData);
@@ -780,7 +800,15 @@ bool Epub::generateThumbBmp(int height) const {
     return false;
   }
 
-  const auto coverImageHref = bookMetadataCache->coreMetadata.coverItemHref;
+  return generateThumbBmp(height, bookMetadataCache->coreMetadata.coverItemHref);
+}
+
+bool Epub::generateThumbBmp(int height, const std::string& coverImageHref) const {
+  if (height <= 0 || height > 1024) {
+    LOG_ERR("EBP", "Invalid thumbnail height: %d", height);
+    return false;
+  }
+  if (Storage.exists(getThumbBmpPath(height).c_str())) return true;
   if (coverImageHref.empty()) {
     LOG_DBG("EBP", "No known cover image for thumbnail");
   } else if (FsHelpers::hasJpgExtension(coverImageHref)) {
@@ -791,7 +819,12 @@ bool Epub::generateThumbBmp(int height) const {
     if (!Storage.openFileForWrite("EBP", coverJpgTempPath, coverJpg)) {
       return false;
     }
-    readItemContentsToStream(coverImageHref, coverJpg, 1024);
+    if (!readItemContentsToStream(coverImageHref, coverJpg, 1024)) {
+      coverJpg.close();
+      Storage.remove(coverJpgTempPath.c_str());
+      LOG_ERR("EBP", "Could not extract thumbnail JPEG");
+      return false;
+    }
     // Explicitly close() file before reopening for reading
     coverJpg.close();
 
@@ -828,7 +861,12 @@ bool Epub::generateThumbBmp(int height) const {
     if (!Storage.openFileForWrite("EBP", coverPngTempPath, coverPng)) {
       return false;
     }
-    readItemContentsToStream(coverImageHref, coverPng, 1024);
+    if (!readItemContentsToStream(coverImageHref, coverPng, 1024)) {
+      coverPng.close();
+      Storage.remove(coverPngTempPath.c_str());
+      LOG_ERR("EBP", "Could not extract thumbnail PNG");
+      return false;
+    }
     // Explicitly close() file before reopening for reading
     coverPng.close();
 

@@ -124,7 +124,7 @@ size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
     remainingInBuffer -= toRead;
     remainingSize -= toRead;
 
-    if (metadataOnly && metadataComplete) {
+    if (metadataOnly && !includeCoverMetadata && metadataComplete) {
       const size_t processed = size - remainingInBuffer;
       return processed < size ? processed : size - 1;
     }
@@ -135,13 +135,24 @@ size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
 
 void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
   auto* self = static_cast<ContentOpfParser*>(userData);
-  (void)atts;
+  if (self->metadataOnly && self->includeCoverMetadata) {
+    // Bound attribute copies and path normalization scratch on the library worker.
+    constexpr size_t MAX_ATTRIBUTE_BYTES = 1024;
+    for (int i = 0; atts[i]; i += 2) {
+      if (strlen(atts[i + 1]) > MAX_ATTRIBUTE_BYTES) {
+        LOG_ERR("COF", "Attribute exceeds library preview limit");
+        XML_StopParser(self->parser, XML_FALSE);
+        return;
+      }
+    }
+  }
 
-  if (self->metadataOnly && self->metadataComplete) {
+  if (self->metadataOnly && !self->includeCoverMetadata && self->metadataComplete) {
     return;
   }
-  if (self->metadataOnly && (xmlLocalNameEquals(name, "manifest") || xmlLocalNameEquals(name, "spine") ||
-                             xmlLocalNameEquals(name, "guide"))) {
+  if (self->metadataOnly && !self->includeCoverMetadata &&
+      (xmlLocalNameEquals(name, "manifest") || xmlLocalNameEquals(name, "spine") ||
+       xmlLocalNameEquals(name, "guide"))) {
     self->metadataComplete = true;
     return;
   }
@@ -180,6 +191,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 
   if (self->state == IN_PACKAGE && xmlLocalNameEquals(name, "manifest")) {
     self->state = IN_MANIFEST;
+    if (self->metadataOnly) return;
     if (!Storage.openFileForWrite("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for writing. This is probably going to be a fatal error.");
     }
@@ -188,6 +200,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 
   if (self->state == IN_PACKAGE && xmlLocalNameEquals(name, "spine")) {
     self->state = IN_SPINE;
+    if (self->metadataOnly) return;
     if (!Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for reading. This is probably going to be a fatal error.");
     }
@@ -207,6 +220,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 
   if (self->state == IN_PACKAGE && xmlLocalNameEquals(name, "guide")) {
     self->state = IN_GUIDE;
+    if (self->metadataOnly) return;
     // TODO Remove print
     LOG_DBG("COF", "Entering guide state.");
     if (!Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
@@ -261,8 +275,10 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     }
 
     // Write items down to SD card
-    serialization::writeString(self->tempItemStore, itemId);
-    serialization::writeString(self->tempItemStore, href);
+    if (!self->metadataOnly) {
+      serialization::writeString(self->tempItemStore, itemId);
+      serialization::writeString(self->tempItemStore, href);
+    }
 
     if (itemId == self->coverItemId) {
       // Some EPUBs set meta name="cover" to an XHTML wrapper item.
@@ -284,7 +300,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     }
 
     // Collect CSS files
-    if (mediaType == MEDIA_TYPE_CSS) {
+    if (!self->metadataOnly && mediaType == MEDIA_TYPE_CSS) {
       self->cssFiles.push_back(href);
     }
 
@@ -394,7 +410,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 void XMLCALL ContentOpfParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<ContentOpfParser*>(userData);
 
-  if (self->metadataOnly && self->metadataComplete) {
+  if (self->metadataOnly && !self->includeCoverMetadata && self->metadataComplete) {
     return;
   }
 
@@ -418,25 +434,25 @@ void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) 
   auto* self = static_cast<ContentOpfParser*>(userData);
   (void)name;
 
-  if (self->metadataOnly && self->metadataComplete) {
+  if (self->metadataOnly && !self->includeCoverMetadata && self->metadataComplete) {
     return;
   }
 
   if (self->state == IN_SPINE && xmlLocalNameEquals(name, "spine")) {
     self->state = IN_PACKAGE;
-    self->tempItemStore.close();
+    if (self->tempItemStore) self->tempItemStore.close();
     return;
   }
 
   if (self->state == IN_GUIDE && xmlLocalNameEquals(name, "guide")) {
     self->state = IN_PACKAGE;
-    self->tempItemStore.close();
+    if (self->tempItemStore) self->tempItemStore.close();
     return;
   }
 
   if (self->state == IN_MANIFEST && xmlLocalNameEquals(name, "manifest")) {
     self->state = IN_PACKAGE;
-    self->tempItemStore.close();
+    if (self->tempItemStore) self->tempItemStore.close();
     return;
   }
 

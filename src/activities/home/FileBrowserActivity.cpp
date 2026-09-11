@@ -16,6 +16,7 @@
 #include "RecentBooksStore.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
+#include "components/OptionPopup.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 #include "fontIds.h"
@@ -87,7 +88,11 @@ FileBrowserActivity::FileBrowserActivity(GfxRenderer& renderer, MappedInputManag
       mode(mode),
       basepath(initialPath.empty() ? "/" : std::move(initialPath)) {}
 
+FileBrowserActivity::~FileBrowserActivity() = default;
+
 void FileBrowserActivity::loadFiles() {
+  ++folderGeneration;
+  coverTop = -1;
   files.clear();
   prewarmedStart = -1;  // new folder contents: re-prewarm the visible window
 
@@ -227,9 +232,130 @@ void FileBrowserActivity::onEnter() {
 }
 
 void FileBrowserActivity::onExit() {
+  stopCoverLoader();
   Activity::onExit();
   files.clear();
   fileNameBuffer.reset();
+  coverRenderer.reset();
+  optionsPopup.reset();
+}
+
+bool FileBrowserActivity::coverView() const {
+  return mode == Mode::Books && SETTINGS.libraryView == CrossPointSettings::COVER_LIST && !coverAllocationFailed;
+}
+
+void FileBrowserActivity::loop() {
+  leaving = false;
+  UiListActivity::loop();
+  if (!leaving) serviceCoverLoader();
+}
+
+void FileBrowserActivity::coverLoaderTask(void* context) {
+  auto* self = static_cast<FileBrowserActivity*>(context);
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if (self->stopRequested.load()) break;
+    if (self->loadState.load() != LoadState::Working) continue;
+    LOG_DBG("LIB", "Preview start: heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
+    loadLibraryBookDetails(self->loadPath, BaseTheme::LIBRARY_COVER_HEIGHT, self->loadResult);
+    LOG_DBG("LIB", "Preview complete: heap=%u, stack remaining=%u", static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+    self->loadState.store(LoadState::Ready);
+  }
+  // All parser objects and SD handles have unwound before onExit deletes this task.
+  self->loaderStopped.store(true);
+  vTaskSuspend(nullptr);
+}
+
+void FileBrowserActivity::stopCoverLoader() {
+  if (!loaderTask) return;
+  stopRequested.store(true);
+  xTaskNotifyGive(loaderTask);
+  while (!loaderStopped.load()) vTaskDelay(pdMS_TO_TICKS(10));
+  vTaskDelete(loaderTask);
+  loaderTask = nullptr;
+  loadState.store(LoadState::Idle);
+}
+
+void FileBrowserActivity::serviceCoverLoader() {
+  bool changed = false;
+  {
+    RenderLock lock(RenderLock::Mode::Try);
+    if (!lock) return;
+    if (loadState.load() == LoadState::Ready) {
+      const int slot = loadIndex - coverTop;
+      if (loadGeneration == folderGeneration && slot >= 0 && slot < coverCount) {
+        coverRows[slot].details = std::move(loadResult);
+        coverRows[slot].loaded = true;
+        detailsDirty = true;
+      }
+      loadState.store(LoadState::Idle);
+    }
+    if (coverView() && coverRenderer && coverTop >= 0 && !loaderFailed && loadState.load() == LoadState::Idle &&
+        millis() - pageChangedAt >= 250 && !(optionsPopup && optionsPopup->isActive())) {
+      for (int slot = 0; slot < coverCount; ++slot) {
+        if (coverRows[slot].loaded) continue;
+        const int index = coverTop + slot;
+        if (!FsHelpers::hasEpubExtension(files[index])) {
+          coverRows[slot].loaded = true;
+          continue;
+        }
+        // One reusable worker stack keeps ZIP/image decoding off the input loop.
+        if (!loaderTask) {
+          stopRequested.store(false);
+          loaderStopped.store(false);
+          if (xTaskCreate(&FileBrowserActivity::coverLoaderTask, "LibraryCovers", 8192, this, 1, &loaderTask) !=
+              pdPASS) {
+            LOG_ERR("FileBrowser", "OOM: cover loader task");
+            loaderTask = nullptr;
+            loaderFailed = true;
+            changed = true;
+            break;
+          }
+        }
+        loadPath = basepath;
+        if (loadPath.back() != '/') loadPath += '/';
+        loadPath += files[index];
+        loadIndex = index;
+        loadGeneration = folderGeneration;
+        loadResult = {};
+        loadState.store(LoadState::Working);
+        xTaskNotifyGive(loaderTask);
+        break;
+      }
+    }
+    bool complete = true;
+    for (int slot = 0; slot < coverCount; ++slot) complete &= coverRows[slot].loaded;
+    if (detailsDirty && (complete || millis() - detailsRenderedAt >= 1500)) {
+      detailsDirty = false;
+      detailsRenderedAt = millis();
+      changed = true;
+    }
+  }
+  if (changed) requestUpdate();
+}
+
+void FileBrowserActivity::showOptions(bool viewOnly) {
+  if (mode != Mode::Books) return;
+  RenderLock lock(*this);
+  app.clearTapFlash();
+  if (!optionsPopup) {
+    optionsPopup = makeUniqueNoThrow<OptionPopup>();
+    if (!optionsPopup) {
+      LOG_ERR("FileBrowser", "OOM: library options");
+      return;
+    }
+  }
+  choosingView = viewOnly || files.empty();
+  static constexpr StrId views[] = {StrId::STR_COMPACT_LIST, StrId::STR_COVER_LIST};
+  static constexpr StrId actions[] = {StrId::STR_OPEN, StrId::STR_DELETE, StrId::STR_LIBRARY_VIEW, StrId::STR_RENAME};
+  const bool canRename =
+      !files.empty() && nav.selected >= 0 && nav.selected < listCount() && files[nav.selected].back() != '/';
+  optionsPopup->show(choosingView ? StrId::STR_LIBRARY_VIEW : StrId::STR_BROWSER_OPTIONS,
+                     choosingView ? views : actions, choosingView ? 2 : (canRename ? 4 : 3),
+                     choosingView ? SETTINGS.libraryView : 0, [this](int option) { pendingOption = option; });
+  lock.unlock();
+  requestUpdate();
 }
 
 // To avoid traversing directories twice (once for cache clearing, once for deletion),
@@ -325,7 +451,7 @@ void FileBrowserActivity::onRowLongPress(const int index) {
   (void)index;  // base already synced nav.selected to the pressed row
   app.clearTapFlash();
   if (mode == Mode::Books) {
-    showEntryActions();
+    showOptions();
   } else {
     activateSelected();
   }
@@ -366,30 +492,10 @@ void FileBrowserActivity::activateSelected() {
   } else {
     const std::string fullPath = basepath + entry;
     lock.unlock();  // onSelectBook launches an activity; don't hold the lock across it
+    leaving = true;
+    stopCoverLoader();
     onSelectBook(fullPath);
   }
-}
-
-void FileBrowserActivity::showEntryActions() {
-  if (mode != Mode::Books || files.empty() || optionPopup.isActive() || nav.selected < 0 ||
-      nav.selected >= listCount()) {
-    return;
-  }
-
-  const bool isDirectory = files[nav.selected].back() == '/';
-  static constexpr StrId FILE_OPTIONS[] = {StrId::STR_OPEN, StrId::STR_DELETE, StrId::STR_RENAME};
-  static constexpr StrId DIRECTORY_OPTIONS[] = {StrId::STR_OPEN, StrId::STR_DELETE};
-  optionPopup.show(StrId::STR_FILENAME, isDirectory ? DIRECTORY_OPTIONS : FILE_OPTIONS, isDirectory ? 2 : 3, 0,
-                   [this](const int index) {
-                     if (index == 0) {
-                       activateSelected();
-                     } else if (index == 1) {
-                       deleteSelected();
-                     } else if (index == 2) {
-                       startRename();
-                     }
-                   });
-  requestUpdate();
 }
 
 void FileBrowserActivity::deleteSelected() {
@@ -432,6 +538,8 @@ void FileBrowserActivity::deleteSelected() {
     LOG_ERR("FileBrowser", "OOM: delete confirmation");
     return;
   }
+  leaving = true;
+  stopCoverLoader();
   startActivityForResult(std::move(confirmation), std::move(handler));
 }
 
@@ -453,6 +561,8 @@ void FileBrowserActivity::startRename() {
     LOG_ERR("FileBrowser", "OOM: rename keyboard");
     return;
   }
+  leaving = true;
+  stopCoverLoader();
   startActivityForResult(std::move(keyboard), [this, oldPath, oldEntry, extension](const ActivityResult& result) {
     if (result.isCancelled) return;
     renameSelectedFile(oldPath, oldEntry, std::get<KeyboardResult>(result.data).text, extension);
@@ -510,8 +620,48 @@ void FileBrowserActivity::renameSelectedFile(const std::string& oldPath, const s
 }
 
 bool FileBrowserActivity::handleCustomInput() {
-  if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
-
+  if (optionsPopup && optionsPopup->isActive()) {
+    {
+      RenderLock lock(*this);
+      optionsPopup->handleInput(mappedInput, [this] { requestUpdate(); });
+    }
+    if (pendingOption >= 0) {
+      const int option = pendingOption;
+      pendingOption = -1;
+      if (choosingView) {
+        if (SETTINGS.libraryView != option) {
+          {
+            RenderLock lock(*this);
+            SETTINGS.libraryView = static_cast<uint8_t>(option);
+            coverAllocationFailed = false;
+            loaderFailed = false;
+            coverTop = -1;
+            nav.drawnRows = 0;
+            nav.followOnBuild = true;
+          }
+          SETTINGS.saveToFile();
+          if (option == CrossPointSettings::COMPACT_LIST) {
+            stopCoverLoader();
+            RenderLock lock(*this);
+            coverRenderer.reset();
+            for (auto& row : coverRows) row = {};
+            loadResult = {};
+            coverCount = 0;
+          }
+          requestUpdate();
+        }
+      } else if (option == 2) {
+        showOptions(true);
+      } else if (option == 1) {
+        deleteSelected();
+      } else if (option == 3) {
+        startRename();
+      } else {
+        activateSelected();
+      }
+    }
+    return true;
+  }
   // Long press BACK (1s+) goes to root folder (Books mode only).
   // In firmware-pick mode we keep navigation simple: short Back = up dir / cancel.
   if (mode == Mode::Books && mappedInput.wasReleased(MappedInputManager::Button::Back) &&
@@ -535,12 +685,17 @@ bool FileBrowserActivity::handleCustomInput() {
 bool FileBrowserActivity::handleButtons() {
   if (mode == Mode::Books && mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, GO_HOME_MS)) {
     app.clearTapFlash();
-    showEntryActions();
+    showOptions();
     return true;
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    activateSelected();
+    if (mode == Mode::Books && mappedInput.getHeldTime() >= GO_HOME_MS) return true;
+    if (mode == Mode::Books && files.empty()) {
+      showOptions();
+    } else {
+      activateSelected();
+    }
     return true;
   }
 
@@ -580,11 +735,6 @@ bool FileBrowserActivity::handleButtons() {
   }
 
   return false;
-}
-
-void FileBrowserActivity::render(RenderLock&& lock) {
-  if (optionPopup.processRender(renderer, mappedInput)) return;
-  UiListActivity::render(std::move(lock));
 }
 
 std::string getFileExtension(const std::string& filename) {
@@ -637,6 +787,21 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
     return;
   }
 
+  if (coverView()) {
+    if (!coverRenderer) {
+      // Reuse the BMP palette, scanline buffers and card props across all visible rows.
+      coverRenderer = makeUniqueNoThrow<LibraryCoverRenderer>();
+      if (!coverRenderer) {
+        LOG_ERR("FileBrowser", "OOM: cover row renderer; using compact list");
+        coverAllocationFailed = true;
+      }
+    }
+    if (coverRenderer) {
+      buildCoverList(screen);
+      return;
+    }
+  }
+
   fui::ListProps props;
   props.rowProvider = &FileBrowserActivity::provideRow;
   props.rowProviderCtx = this;
@@ -661,6 +826,54 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   screen.list(props);
 }
 
+void FileBrowserActivity::buildCoverList(UiScreen& screen) {
+  const auto status = screen.takeBottom(
+      static_cast<int16_t>(screen.target().lineHeight(screen.theme().smallText.font) + screen.theme().spaceSm));
+  const int rowHeight = GUI.getLibraryRowHeight(screen);
+  const int gap = screen.theme().listRowGap;
+  const auto body = screen.body();
+  const int rows = std::max(1, std::min(MAX_COVER_ROWS, (body.height + gap) / (rowHeight + gap)));
+  const bool resized = nav.visibleRows != rows;
+  nav.drawnRows = rows;
+  nav.drawnCount = listCount();
+  if (resized) nav.followOnBuild = true;
+  auto viewportBody = body;
+  viewportBody.height = static_cast<int16_t>(std::min<int>(body.height, rows * (rowHeight + gap) - gap));
+  auto& viewport = coverRenderer->viewport;
+  nav.syncToProps(viewportBody, rowHeight, gap, listCount(), viewport);
+  const int count = std::min(rows, listCount() - nav.top);
+  if (coverTop != nav.top || coverCount != count) {
+    coverTop = nav.top;
+    coverCount = count;
+    pageChangedAt = millis();
+    detailsRenderedAt = pageChangedAt;
+    for (auto& row : coverRows) {
+      row.details.title.clear();
+      row.details.author.clear();
+      row.details.coverPath.clear();
+      row.loaded = false;
+    }
+  }
+  for (int slot = 0; slot < count; ++slot) {
+    const int index = nav.top + slot;
+    const auto& details = coverRows[slot].details;
+    formatFileName(files[index], rowNameBuf, sizeof(rowNameBuf));
+    GUI.drawLibraryBookRow(screen, renderer, *coverRenderer, details.title.empty() ? rowNameBuf : details.title.c_str(),
+                           details.author.empty() ? nullptr : details.author.c_str(), details.coverPath.c_str(),
+                           UITheme::getFileIcon(files[index]), index == viewport.selectedIndex, index, ACTION_ROW,
+                           rowHeight);
+  }
+  nav.onListRendered(static_cast<uint16_t>(nav.top), count,
+                     viewport.selectedIndex >= nav.top && viewport.selectedIndex < nav.top + count);
+  fui::drawListScrollIndicator(screen.target(), body, listCount(), rows, nav.top, screen.theme().listScrollWidth,
+                               screen.theme().listScrollSide, screen.theme().listScrollInset);
+  bool loading = false;
+  for (int slot = 0; slot < count; ++slot) {
+    loading |= !coverRows[slot].loaded && FsHelpers::hasEpubExtension(files[nav.top + slot]);
+  }
+  if (loading && !loaderFailed) screen.target().text(status, tr(STR_LOADING_COVERS), screen.theme().smallText);
+}
+
 void FileBrowserActivity::drawChrome() {
   const auto pageWidth = renderer.getScreenWidth();
   const auto& metrics = UITheme::getInstance().getMetrics();
@@ -675,12 +888,20 @@ void FileBrowserActivity::drawChrome() {
 }
 
 void FileBrowserActivity::drawFooter() {
+  if (optionsPopup && optionsPopup->isActive()) {
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    optionsPopup->render(renderer);
+    return;
+  }
   const char* backLabel = (basepath == "/") ? (mode == Mode::PickFirmware ? tr(STR_BACK) : tr(STR_HOME)) : tr(STR_BACK);
   // In PickFirmware mode, Confirm on a .bin returns the path to the caller (not "open"); show
   // STR_SELECT instead. Directories in the same picker still descend, so keep STR_OPEN there.
   const bool selectingFirmwareFile = mode == Mode::PickFirmware && !files.empty() && nav.selected >= 0 &&
                                      nav.selected < listCount() && files[nav.selected].back() != '/';
-  const char* confirmLabel = files.empty() ? "" : (selectingFirmwareFile ? tr(STR_SELECT) : tr(STR_OPEN));
+  const char* confirmLabel = mode == Mode::Books
+                                 ? tr(STR_OPEN_OPTIONS)
+                                 : (files.empty() ? "" : (selectingFirmwareFile ? tr(STR_SELECT) : tr(STR_OPEN)));
   const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, files.empty() ? "" : tr(STR_DIR_UP),
                                             files.empty() ? "" : tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

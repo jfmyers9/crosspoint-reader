@@ -31,6 +31,36 @@ constexpr int bookmarkStatusIconHeight = 14;
 constexpr int bookmarkStatusIconGap = 4;
 constexpr int bookmarkStatusIconTopCrop = 2;
 
+bool paintLibraryCover(freeink::ui::DrawTarget& target, const freeink::ui::Rect rect,
+                       const freeink::ui::BookCardProps& props, void* userData) {
+  namespace fui = freeink::ui;
+  auto& scratch = *static_cast<LibraryCoverRenderer*>(userData);
+  target.fill(rect, fui::Paint::solid(fui::Color::White));
+  bool drawn = false;
+  if (scratch.coverPath && scratch.coverPath[0] && Storage.openFileForRead("LIB", scratch.coverPath, scratch.file)) {
+    auto& bitmap = scratch.bitmap;
+    if (bitmap.parseHeaders() == BmpReaderError::Ok && bitmap.is1Bit() && bitmap.getWidth() > 0 &&
+        bitmap.getWidth() <= BaseTheme::LIBRARY_COVER_HEIGHT * 2 && bitmap.getHeight() > 0 &&
+        bitmap.getHeight() <= BaseTheme::LIBRARY_COVER_HEIGHT) {
+      const float scale = std::min(1.0f, std::min(static_cast<float>(rect.width) / bitmap.getWidth(),
+                                                  static_cast<float>(rect.height) / bitmap.getHeight()));
+      const int width = std::max(1, static_cast<int>(bitmap.getWidth() * scale));
+      const int height = std::max(1, static_cast<int>(bitmap.getHeight() * scale));
+      drawn = scratch.renderer->drawBitmap1Bit(
+          bitmap, rect.x + (rect.width - width) / 2, rect.y + (rect.height - height) / 2, rect.width, rect.height,
+          scratch.outputRow, sizeof(scratch.outputRow), scratch.rawRow, sizeof(scratch.rawRow));
+    }
+    scratch.file.close();
+  }
+  if (!drawn) {
+    target.fill(rect, fui::Paint::dither(fui::Color::LightGray));
+    const fui::Rect iconRect{static_cast<int16_t>(rect.x + (rect.width - 32) / 2),
+                             static_cast<int16_t>(rect.y + (rect.height - 32) / 2), 32, 32};
+    target.bitmap(iconRect, props.cover, fui::BitmapMode::Contain, fui::Paint::solid(fui::Color::Black));
+  }
+  return true;
+}
+
 void drawBookmarkStatusIcon(const GfxRenderer& renderer, const int x, const int y) {
   constexpr int bytesPerRow = bookmarkStatusIconWidth / 8;
   for (int row = 0; row < bookmarkStatusIconHeight; ++row) {
@@ -43,6 +73,54 @@ void drawBookmarkStatusIcon(const GfxRenderer& renderer, const int x, const int 
 }
 
 }  // namespace
+
+int BaseTheme::getLibraryRowHeight(freeink::ui::Screen<24>& screen) const {
+  const auto& theme = screen.theme();
+  const int textHeight = 2 * screen.frame().target().lineHeight(theme.bodyText.font) +
+                         screen.frame().target().lineHeight(theme.smallText.font) + 12;
+  return std::max(LIBRARY_COVER_HEIGHT, textHeight) + 16;
+}
+
+void BaseTheme::drawLibraryBookRow(freeink::ui::Screen<24>& screen, GfxRenderer& renderer,
+                                   LibraryCoverRenderer& coverRenderer, const char* title, const char* author,
+                                   const char* coverPath, const UIIcon fallbackIcon, const bool selected,
+                                   const int index, const freeink::ui::ActionId action, const int rowHeight) const {
+  namespace fui = freeink::ui;
+  const auto& theme = screen.theme();
+  auto& frame = screen.frame();
+  auto rect = screen.takeTop(static_cast<int16_t>(rowHeight), theme.listRowGap);
+  rect = rect.inset({0, theme.listInset, 0, theme.listInset});
+  const auto state = selected ? fui::StateSelected : fui::StateNormal;
+  frame.hit(rect, action, static_cast<int16_t>(index), fui::InputTouch | fui::InputLongPress, state);
+  auto& card = coverRenderer.card;
+  card.title = title;
+  card.author = author && author[0] ? author : nullptr;
+  card.cover = listIconFor(fallbackIcon, 32);
+  card.titleText = theme.bodyText;
+  card.titleText.maxLines = 2;
+  card.authorText = theme.smallText;
+  card.authorText.maxLines = 1;
+  card.styles = theme.listRow.unset() ? fui::defaultListRowStyles() : theme.listRow;
+  card.styles.normal.radius = theme.listRowRadius;
+  card.styles.selected = card.styles.normal;
+  card.styles.selected.border = fui::Paint::solid(fui::Color::Black);
+  card.styles.active = card.styles.normal;
+  card.styles.active.background = fui::Paint::dither(fui::Color::LightGray);
+  card.state = frame.stateFor(action, static_cast<int16_t>(index), state);
+  card.action = fui::NO_ACTION;
+  card.coverSize = {64, static_cast<int16_t>(rowHeight - 16)};
+  card.padding = {8, 8, 8, 8};
+  card.progressMax = 0;
+  card.textProgressGap = 0;
+  card.centerTextVertically = true;
+  card.selectionIndicator = fui::BookCardSelectionIndicator::CoverFrame;
+  card.selectedCoverFrameRadius = theme.listRowRadius;
+  card.coverPainter = paintLibraryCover;
+  card.coverPainterUserData = &coverRenderer;
+  coverRenderer.renderer = &renderer;
+  coverRenderer.coverPath = coverPath;
+  fui::bookCard(frame, rect, card);
+}
 
 void BaseTheme::drawBatteryOutline(const GfxRenderer& renderer, int x, int y, int battWidth, int rectHeight) {
   // Top line
