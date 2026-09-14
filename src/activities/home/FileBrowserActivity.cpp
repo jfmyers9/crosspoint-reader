@@ -250,49 +250,26 @@ void FileBrowserActivity::loop() {
   if (!leaving) serviceCoverLoader();
 }
 
-void FileBrowserActivity::coverLoaderTask(void* context) {
-  auto* self = static_cast<FileBrowserActivity*>(context);
-  for (;;) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    if (self->stopRequested.load()) break;
-    if (self->loadState.load() != LoadState::Working) continue;
-    LOG_DBG("LIB", "Preview start: heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
-    loadLibraryBookDetails(self->loadPath, BaseTheme::LIBRARY_COVER_HEIGHT, self->loadResult);
-    LOG_DBG("LIB", "Preview complete: heap=%u, stack remaining=%u", static_cast<unsigned>(ESP.getFreeHeap()),
-            static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
-    self->loadState.store(LoadState::Ready);
-  }
-  // All parser objects and SD handles have unwound before onExit deletes this task.
-  self->loaderStopped.store(true);
-  vTaskSuspend(nullptr);
-}
-
-void FileBrowserActivity::stopCoverLoader() {
-  if (!loaderTask) return;
-  stopRequested.store(true);
-  xTaskNotifyGive(loaderTask);
-  while (!loaderStopped.load()) vTaskDelay(pdMS_TO_TICKS(10));
-  vTaskDelete(loaderTask);
-  loaderTask = nullptr;
-  loadState.store(LoadState::Idle);
-}
+void FileBrowserActivity::stopCoverLoader() { coverLoader.stop(); }
 
 void FileBrowserActivity::serviceCoverLoader() {
   bool changed = false;
   {
     RenderLock lock(RenderLock::Mode::Try);
     if (!lock) return;
-    if (loadState.load() == LoadState::Ready) {
+    LibraryBookDetails loadResult;
+    int loadIndex;
+    uint32_t loadGeneration;
+    if (coverLoader.takeResult(loadResult, loadIndex, loadGeneration)) {
       const int slot = loadIndex - coverTop;
       if (loadGeneration == folderGeneration && slot >= 0 && slot < coverCount) {
         coverRows[slot].details = std::move(loadResult);
         coverRows[slot].loaded = true;
         detailsDirty = true;
       }
-      loadState.store(LoadState::Idle);
     }
-    if (coverView() && coverRenderer && coverTop >= 0 && !loaderFailed && loadState.load() == LoadState::Idle &&
-        millis() - pageChangedAt >= 250 && !(optionsPopup && optionsPopup->isActive())) {
+    if (coverView() && coverRenderer && coverTop >= 0 && !coverLoader.failed() && !coverLoader.working() &&
+        !coverLoader.ready() && millis() - pageChangedAt >= 250 && !(optionsPopup && optionsPopup->isActive())) {
       for (int slot = 0; slot < coverCount; ++slot) {
         if (coverRows[slot].loaded) continue;
         const int index = coverTop + slot;
@@ -300,27 +277,10 @@ void FileBrowserActivity::serviceCoverLoader() {
           coverRows[slot].loaded = true;
           continue;
         }
-        // One reusable worker stack keeps ZIP/image decoding off the input loop.
-        if (!loaderTask) {
-          stopRequested.store(false);
-          loaderStopped.store(false);
-          if (xTaskCreate(&FileBrowserActivity::coverLoaderTask, "LibraryCovers", 8192, this, 1, &loaderTask) !=
-              pdPASS) {
-            LOG_ERR("FileBrowser", "OOM: cover loader task");
-            loaderTask = nullptr;
-            loaderFailed = true;
-            changed = true;
-            break;
-          }
-        }
-        loadPath = basepath;
+        std::string loadPath = basepath;
         if (loadPath.back() != '/') loadPath += '/';
         loadPath += files[index];
-        loadIndex = index;
-        loadGeneration = folderGeneration;
-        loadResult = {};
-        loadState.store(LoadState::Working);
-        xTaskNotifyGive(loaderTask);
+        if (!coverLoader.start(loadPath, index, folderGeneration)) changed = true;
         break;
       }
     }
@@ -634,7 +594,7 @@ bool FileBrowserActivity::handleCustomInput() {
             RenderLock lock(*this);
             SETTINGS.libraryView = static_cast<uint8_t>(option);
             coverAllocationFailed = false;
-            loaderFailed = false;
+            coverLoader.resetFailure();
             coverTop = -1;
             nav.drawnRows = 0;
             nav.followOnBuild = true;
@@ -645,7 +605,6 @@ bool FileBrowserActivity::handleCustomInput() {
             RenderLock lock(*this);
             coverRenderer.reset();
             for (auto& row : coverRows) row = {};
-            loadResult = {};
             coverCount = 0;
           }
           requestUpdate();
@@ -871,7 +830,7 @@ void FileBrowserActivity::buildCoverList(UiScreen& screen) {
   for (int slot = 0; slot < count; ++slot) {
     loading |= !coverRows[slot].loaded && FsHelpers::hasEpubExtension(files[nav.top + slot]);
   }
-  if (loading && !loaderFailed) screen.target().text(status, tr(STR_LOADING_COVERS), screen.theme().smallText);
+  if (loading && !coverLoader.failed()) screen.target().text(status, tr(STR_LOADING_COVERS), screen.theme().smallText);
 }
 
 void FileBrowserActivity::drawChrome() {

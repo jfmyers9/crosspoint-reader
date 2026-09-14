@@ -300,7 +300,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t longPressMenuFunction = LP_MENU_DISABLED;
   // UI Theme
   uint8_t uiTheme = LYRA;
+  // Folder browser layout; keep the persisted libraryView key for compatibility.
   uint8_t libraryView = COMPACT_LIST;
+  uint8_t libraryCoverView = 0;
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
   // Power button return from footnotes (1 = enabled, 0 = disabled)
