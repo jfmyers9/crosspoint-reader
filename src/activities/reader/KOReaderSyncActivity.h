@@ -53,6 +53,11 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
 
   State state = WIFI_SELECTION;
   std::string statusMessage;
+  char failureServer[96] = {};
+  char failureContext[96] = {};
+  const char* failureHint = nullptr;
+  void describeSyncFailure(KOReaderSyncClient::Error error, bool upload,
+                           const KOReaderSyncClient::Diagnostic& diagnostic);
   std::string documentHash;
 
   // Remote progress data
