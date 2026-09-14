@@ -1,0 +1,4 @@
+add_executable(SyncDiagnosticHostTest SyncDiagnosticHostTest.cpp)
+target_include_directories(SyncDiagnosticHostTest PRIVATE ${REPO_ROOT}/lib/KOReaderSync)
+target_compile_options(SyncDiagnosticHostTest PRIVATE -UNDEBUG)
+add_test(NAME SyncDiagnosticHostTest COMMAND SyncDiagnosticHostTest)
