@@ -119,8 +119,8 @@ The Browse Files screen acts as a file and folder browser. The full path to the 
 
 * **Navigate List:** Use **Left** (or **Side Up**), or **Right** (or **Side Down**) to move the selection cursor up and down through folders and books. You can also long-press these buttons to scroll a full page up or down.
 * **Open Selection:** Press **Confirm** to open a folder or start reading a selected book. Selecting a `.bmp` file will open the image viewer.
-* **Book Options:** Hold **Confirm** for one second and release, or long-press a row on a touch device, to open **Open**, **Delete**, and **Library view** options. **Delete** asks for confirmation before removing the selected file or folder.
-* **Library View:** Choose **Settings → Display → Library view → Cover list** for small covers, book titles, and authors. **Compact list** is the default. You can also change this from **Book Options** by holding Confirm or long-pressing a book. The choice applies to every folder and survives a restart; switching views keeps the selected book.
+* **Book Options:** Hold **Confirm** for one second and release, or long-press a row on a touch device, to open **Open**, **Delete**, and **File browser view** options. **Delete** asks for confirmation before removing the selected file or folder.
+* **File Browser View:** Choose **Settings → Display → File browser view → Cover list** for small covers, book titles, and authors. **Compact list** is the default. You can also change this from **Book Options** by holding Confirm or long-pressing a book. The choice applies to every folder and survives a restart; switching views keeps the selected book. This setting does not change the separate Library screen.
 
 Cover list prepares visible EPUBs in the background and stores previews on the SD card. Filenames and placeholder icons appear while **Loading covers…** is shown; navigation remains available. Folders and other file formats retain their names and icons. Missing or unsupported covers use a placeholder. Opening a book or leaving the browser may briefly wait for an in-progress cover decode to finish safely. **Clear cache** also removes these previews.
 * **Rename or Move:** Files can be renamed or moved to a different folder from within the browse screen.
@@ -133,6 +133,8 @@ The Library indexes up to 4,096 supported books on the SD card and shows their t
 - **Added** keeps books in the order in which the Library first discovered them. Down shows newest additions first; up shows oldest first.
 - **Title** groups books by the first letter of the title. Up sorts A-Z and down sorts Z-A. Titles beginning with numbers or punctuation appear under `#`; letters from non-English scripts, including Hebrew, have their own groups.
 - **Author** groups books by author. Up sorts A-Z and down sorts Z-A.
+
+Enable **Settings → Display → Library covers** for a cover-list layout on the Library screen. This is off by default and independent of **File browser view**. Titles and authors still come from the Library index; visible EPUB thumbnails load in the background using the same SD preview cache as Browse Files. Missing or unsupported covers use placeholders. Sorting, search, and grouping keep working; collapsed groups remain compact lists.
 
 On a button-only device:
 
@@ -250,6 +252,10 @@ The Settings screen allows you to configure the device's behavior. There are a f
   - "Always" - Always hide battery percentage
 
 - **Refresh Frequency**: Set how often the screen does a full refresh while reading to reduce ghosting; options are every 1, 5, 10, 15, or 30 pages.
+
+- **File browser view**: Choose **Compact list** (default) or **Cover list** for Browse Files.
+
+- **Library covers**: Show cover thumbnails in the Library book list (off by default). This does not change Browse Files.
 
 - **UI Theme**: Set which UI theme to use:
   

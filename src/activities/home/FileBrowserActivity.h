@@ -1,13 +1,13 @@
 #pragma once
 
 #include <array>
-#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "activities/UiListActivity.h"
 #include "util/LibraryBookDetails.h"
+#include "util/LibraryCoverLoader.h"
 
 class LibraryCoverRenderer;
 class OptionPopup;
@@ -60,21 +60,11 @@ class FileBrowserActivity final : public UiListActivity {
   uint32_t pageChangedAt = 0;
   uint32_t detailsRenderedAt = 0;
   bool detailsDirty = false;
-  TaskHandle_t loaderTask = nullptr;
-  enum class LoadState { Idle, Working, Ready };
-  std::atomic<LoadState> loadState{LoadState::Idle};
-  std::atomic<bool> stopRequested{false};
-  std::atomic<bool> loaderStopped{false};
-  std::string loadPath;
-  LibraryBookDetails loadResult;
-  uint32_t loadGeneration = 0;
-  int loadIndex = -1;
-  bool loaderFailed = false;
+  LibraryCoverLoader coverLoader;
 
   bool coverView() const;
   void buildCoverList(UiScreen& screen);
   void serviceCoverLoader();
-  static void coverLoaderTask(void* context);
   void stopCoverLoader();
   void showOptions(bool viewOnly = false);
 
@@ -107,6 +97,6 @@ class FileBrowserActivity final : public UiListActivity {
   void onEnter() override;
   void onExit() override;
   void loop() override;
-  bool preventAutoSleep() override { return loadState.load() == LoadState::Working; }
-  bool skipLoopDelay() override { return loadState.load() == LoadState::Working; }
+  bool preventAutoSleep() override { return coverLoader.working(); }
+  bool skipLoopDelay() override { return coverLoader.working(); }
 };

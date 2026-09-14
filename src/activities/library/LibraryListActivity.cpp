@@ -1,6 +1,7 @@
 #include "LibraryListActivity.h"
 
 #include <FreeInkUIIcon.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -23,6 +24,7 @@
 #include "components/icons/search32.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/LibraryCoverLoader.h"
 
 namespace fui = freeink::ui;
 
@@ -63,6 +65,28 @@ const char* tabLabelFor(const int tab) {
 
 }  // namespace
 
+struct LibraryListActivity::CoverState {
+  static constexpr int MAX_ROWS = 8;
+  struct Row {
+    std::string path;
+    std::string thumbnail;
+    bool loaded = false;
+  };
+  Row rows[MAX_ROWS];
+  LibraryCoverLoader loader;
+  LibraryCoverRenderer renderer;
+  LibraryBookDetails result;
+  std::string pathScratch;
+  std::string title;
+  std::string author;
+  uint32_t generation = 0;
+  uint32_t pageChangedAt = 0;
+  uint32_t renderedAt = 0;
+  int top = -1;
+  int count = 0;
+  bool dirty = false;
+};
+
 LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     : UiTabListActivity("Library", renderer, mappedInput, true) {
   // Three short tab labels: a full-slot pill would stretch across a third of
@@ -78,6 +102,12 @@ void LibraryListActivity::onEnter() {
   // needs the card to itself.
   RenderLock lock(*this);
   UiTabListActivity::onEnter();
+  if (SETTINGS.libraryCoverView) {
+    // The bitmap scratch and bounded page outlive individual renders and are
+    // too large for the task stack. Compact mode allocates neither.
+    covers = makeUniqueNoThrow<CoverState>();
+    if (!covers) LOG_ERR("LIB", "OOM: cover page; using compact rows");
+  }
   app.on(ACTION_SEARCH, &LibraryListActivity::searchActionTrampoline, this);
 
   // Recent is backed by the resident store. Prune before opening the index so
@@ -107,8 +137,81 @@ void LibraryListActivity::onEnter() {
 }
 
 void LibraryListActivity::onExit() {
+  stopCovers();
+  covers.reset();
   index.close();
   Activity::onExit();
+}
+
+LibraryListActivity::~LibraryListActivity() = default;
+
+bool LibraryListActivity::preventAutoSleep() { return covers && covers->loader.working(); }
+bool LibraryListActivity::skipLoopDelay() { return preventAutoSleep(); }
+
+void LibraryListActivity::stopCovers() {
+  leaving = true;
+  if (covers) covers->loader.stop();
+}
+
+void LibraryListActivity::loop() {
+  leaving = false;
+  UiTabListActivity::loop();
+  if (!leaving) serviceCovers();
+}
+
+void LibraryListActivity::serviceCovers() {
+  if (!covers) return;
+  bool redraw = false;
+  {
+    RenderLock lock(RenderLock::Mode::Try);
+    if (!lock) return;
+    auto& state = *covers;
+    int slot = -1;
+    uint32_t generation = 0;
+    if (state.loader.takeResult(state.result, slot, generation)) {
+      if (generation == state.generation && slot >= 0 && slot < state.count) {
+        state.rows[slot].thumbnail = std::move(state.result.coverPath);
+        state.rows[slot].loaded = true;
+        state.dirty = true;
+      }
+      state.result = {};
+    }
+    if (!groupsCollapsed && state.count > 0 && !state.loader.working() && !state.loader.ready() &&
+        !state.loader.failed() && millis() - state.pageChangedAt >= 250) {
+      for (int i = 0; i < state.count; ++i) {
+        auto& row = state.rows[i];
+        if (row.loaded) continue;
+        if (!FsHelpers::hasEpubExtension(row.path)) {
+          row.loaded = true;
+          continue;
+        }
+        if (!state.loader.start(row.path, i, state.generation)) redraw = state.loader.failed();
+        break;
+      }
+    }
+    bool complete = true;
+    for (int i = 0; i < state.count; ++i) complete &= state.rows[i].loaded;
+    if (state.dirty && (complete || millis() - state.renderedAt >= 1500)) {
+      state.dirty = false;
+      state.renderedAt = millis();
+      redraw = true;
+    }
+  }
+  if (redraw) requestUpdate();
+}
+
+bool LibraryListActivity::pathFor(int entry, std::string& path) {
+  path.clear();
+  if (entry < 0) return false;
+  if (entry < pinnedCount()) {
+    const auto& books = RECENT_BOOKS.getBooks();
+    if (entry >= static_cast<int>(books.size())) return false;
+    path = books[static_cast<size_t>(entry)].path;
+    return true;
+  }
+  const auto ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
+  library::ClixRecord record{};
+  return ordinal != 0xFFFF && index.readRecord(ordinal, record) && index.readPath(record, path);
 }
 
 bool LibraryListActivity::rebuildIndex() {
@@ -186,6 +289,7 @@ void LibraryListActivity::refreshOverlap() {
 }
 
 void LibraryListActivity::openSelectedBook() {
+  stopCovers();
   std::string path;
   if (selectedEntry() < pinnedCount()) {
     const auto& books = RECENT_BOOKS.getBooks();
@@ -242,6 +346,7 @@ void LibraryListActivity::onRowLongPress(const int index) {
 }
 
 void LibraryListActivity::promptRemoveRecentBook(const std::string& path, const std::string& title) {
+  stopCovers();
   const bool reopenIndex = index.isOpen();
   index.close();
   auto confirmation =
@@ -271,6 +376,7 @@ void LibraryListActivity::promptRemoveRecentBook(const std::string& path, const 
 }
 
 void LibraryListActivity::promptDeleteBook(const int entry) {
+  stopCovers();
   if (!index.isOpen() || entry < 0 || entry >= bookRowCount()) return;
   const uint16_t ordinal = index.ordinalForRow(sortOrder, static_cast<uint16_t>(rowFor(entry)));
   if (ordinal == 0xFFFF) return;
@@ -334,6 +440,7 @@ void LibraryListActivity::promptDeleteBook(const int entry) {
 }
 
 void LibraryListActivity::openSearch() {
+  stopCovers();
   app.clearTapFlash();
   // No key filtering here on purpose. Greying out the letters that lead nowhere
   // was built, tested on device and removed: a letter you can see but cannot
@@ -656,6 +763,7 @@ bool LibraryListActivity::handleButtons() {
       nav.selected = 0;
       requestUpdate();
     } else {
+      stopCovers();
       onGoHome();
     }
     return true;
@@ -706,6 +814,15 @@ void LibraryListActivity::navigateButtons() {
 }
 
 void LibraryListActivity::buildRows(UiScreen& screen) {
+  if (covers && !groupsCollapsed) {
+    buildCoverRows(screen);
+    return;
+  }
+  if (covers && covers->count) {
+    ++covers->generation;
+    covers->count = 0;
+    covers->top = -1;
+  }
   auto& nav = activeNav();
   const int count = listCount();
   const bool authorGrouped = isAuthorSort(sortOrder);
@@ -794,6 +911,62 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
           rows > 0 ? winItems[0].label : "<none>");
 }
 
+void LibraryListActivity::buildCoverRows(UiScreen& screen) {
+  auto& state = *covers;
+  auto& navigation = activeNav();
+  const auto status = screen.takeBottom(
+      static_cast<int16_t>(screen.target().lineHeight(screen.theme().smallText.font) + screen.theme().spaceSm));
+  const int height = GUI.getLibraryRowHeight(screen);
+  const int gap = screen.theme().listRowGap;
+  const auto body = screen.body();
+  const int visible = std::max(1, std::min(CoverState::MAX_ROWS, (body.height + gap) / (height + gap)));
+  if (navigation.visibleRows != visible) navigation.followOnBuild = true;
+  navigation.drawnRows = visible;
+  navigation.drawnCount = listCount();
+  auto viewportBody = body;
+  viewportBody.height = static_cast<int16_t>(std::min<int>(body.height, visible * (height + gap) - gap));
+  auto& viewport = state.renderer.viewport;
+  navigation.syncToProps(viewportBody, height, gap, listCount(), viewport, 1);
+  const int count = std::min(visible, listCount() - navigation.top);
+  bool changed = state.top != navigation.top || state.count != count;
+  for (int slot = 0; slot < count; ++slot) {
+    if (!pathFor(navigation.top + slot, state.pathScratch)) state.pathScratch.clear();
+    if (state.rows[slot].path != state.pathScratch) {
+      state.rows[slot].path = state.pathScratch;
+      changed = true;
+    }
+  }
+  if (changed) {
+    ++state.generation;
+    state.top = navigation.top;
+    state.count = count;
+    state.pageChangedAt = millis();
+    state.renderedAt = state.pageChangedAt;
+    state.dirty = false;
+    for (auto& row : state.rows) {
+      row.thumbnail.clear();
+      row.loaded = false;
+    }
+  }
+  bool loading = false;
+  for (int slot = 0; slot < count; ++slot) {
+    const int entry = navigation.top + slot;
+    auto& row = state.rows[slot];
+    rowTextFor(entry, state.title, state.author);
+    GUI.drawLibraryBookRow(screen, renderer, state.renderer, state.title.c_str(),
+                           state.author.empty() ? nullptr : state.author.c_str(), row.thumbnail.c_str(),
+                           UITheme::getFileIcon(row.path), entry == viewport.selectedIndex, entry, ACTION_ROW, height);
+    loading |= !row.loaded && FsHelpers::hasEpubExtension(row.path);
+  }
+  navigation.onListRendered(
+      static_cast<uint16_t>(navigation.top), count,
+      viewport.selectedIndex >= navigation.top && viewport.selectedIndex < navigation.top + count);
+  fui::drawListScrollIndicator(screen.target(), body, listCount(), visible, navigation.top,
+                               screen.theme().listScrollWidth, screen.theme().listScrollSide,
+                               screen.theme().listScrollInset);
+  if (loading && !state.loader.failed()) screen.target().text(status, tr(STR_LOADING_COVERS), screen.theme().smallText);
+}
+
 void LibraryListActivity::formatInitialHeading(uint32_t initial, std::string& out) {
   out.clear();
   if (initial == 0) {
@@ -855,6 +1028,11 @@ void LibraryListActivity::buildScreen(UiScreen& screen) {
 
   if (!degraded) buildTabBar(screen);
   if (bookRowCount() == 0) {
+    if (covers && covers->count) {
+      ++covers->generation;
+      covers->count = 0;
+      covers->top = -1;
+    }
     const char* message = tr(STR_LIBRARY_NO_RESULTS);
     if (filterFailed) {
       message = tr(STR_LIBRARY_SEARCH_UNAVAILABLE);

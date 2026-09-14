@@ -31,9 +31,13 @@
 class LibraryListActivity final : public UiTabListActivity {
  public:
   LibraryListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
+  ~LibraryListActivity() override;
 
   void onEnter() override;
   void onExit() override;
+  void loop() override;
+  bool preventAutoSleep() override;
+  bool skipLoopDelay() override;
 
  protected:
   // --- UiListActivity / UiTabListActivity contract ---------------------------
@@ -55,6 +59,13 @@ class LibraryListActivity final : public UiTabListActivity {
   void drawFooter() override;
 
  private:
+  struct CoverState;
+  std::unique_ptr<CoverState> covers;
+  bool leaving = false;
+  void buildCoverRows(UiScreen& screen);
+  void serviceCovers();
+  void stopCovers();
+  bool pathFor(int entry, std::string& path);
   // The screen's own actions, after the base's ACTION_ROW / ACTION_TAB.
   static constexpr freeink::ui::ActionId ACTION_SEARCH = ACTION_TAB_USER;
 
