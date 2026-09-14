@@ -22,6 +22,7 @@
 std::vector<std::string> progressFetches;
 bool primaryProgressMissing = false;
 int KOReaderSyncClient::lastHttpCode = 0;
+KOReaderSyncClient::Diagnostic KOReaderSyncClient::lastDiagnostic{};
 KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& documentHash, KOReaderProgress& out) {
   progressFetches.push_back(documentHash);
   const bool primary = documentHash == "filename-id";

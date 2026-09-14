@@ -25,6 +25,7 @@ struct Pull {
   std::string documentHash;      // empty: the document id could not be calculated
   bool extensionsSynced = true;  // false: Sync Clippings is enabled and failed; progress was not fetched
   KOReaderSyncClient::Error result = KOReaderSyncClient::OK;  // NOT_FOUND: the server has no progress
+  KOReaderSyncClient::Diagnostic primaryDiagnostic;
   KOReaderProgress remote;
   // Smart sync only: the record stored under the other match method's id, for
   // the caller to compare once both positions can be mapped into the book.

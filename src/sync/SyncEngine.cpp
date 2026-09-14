@@ -59,6 +59,7 @@ syncEngine::Pull syncEngine::pull(const std::string& bookPath, const bool smartS
   if (!pull.extensionsSynced) return pull;
 
   pull.result = KOReaderSyncClient::getProgress(pull.documentHash, pull.remote);
+  pull.primaryDiagnostic = KOReaderSyncClient::lastDiagnostic;
   LOG_DBG("SYNC", "Remote progress: result=%d http=%d doc=%s", pull.result, KOReaderSyncClient::lastHttpCode,
           pull.documentHash.c_str());
 
