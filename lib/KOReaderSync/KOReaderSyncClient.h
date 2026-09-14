@@ -111,4 +111,11 @@ class KOReaderSyncClient {
 
   /** HTTP status code from the last request (for diagnostics). */
   static int lastHttpCode;
+  enum class FailureStage { NONE, INVALID_URL, WIFI_DISCONNECTED, TAILNET, TRANSPORT, INCOMPLETE_RESPONSE };
+  struct Diagnostic {
+    FailureStage stage = FailureStage::NONE;
+    uint32_t elapsedMs = 0;
+    int code = 0;
+  };
+  static Diagnostic lastDiagnostic;
 };
