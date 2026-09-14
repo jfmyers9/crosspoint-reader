@@ -4,6 +4,7 @@
 #include <HalMemory.h>
 #include <Logging.h>
 #include <SecureHttpClient.h>
+#include <WiFi.h>
 #include <base64.h>
 
 #include <cstring>
@@ -23,6 +24,7 @@
 #endif
 
 int KOReaderSyncClient::lastHttpCode = 0;
+KOReaderSyncClient::Diagnostic KOReaderSyncClient::lastDiagnostic;
 
 namespace {
 // Device identifier for CrossPoint reader
@@ -150,18 +152,41 @@ int sendMagicDnsRequest(const char* method, const std::string& url, const std::s
 
 int sendSyncRequest(const char* method, const std::string& url, const std::string& payload, bool withAuth,
                     bool jsonBody, std::string* responseBody = nullptr, size_t maxResponseBytes = 0) {
+  using Stage = KOReaderSyncClient::FailureStage;
+  auto& diagnostic = KOReaderSyncClient::lastDiagnostic;
+  const uint32_t started = millis();
+  const auto finish = [&](int code) {
+    diagnostic.code = code;
+    diagnostic.elapsedMs = millis() - started;
+    if (code <= 0 && diagnostic.stage == Stage::NONE) {
+      diagnostic.stage = WiFi.status() == WL_CONNECTED ? Stage::TRANSPORT : Stage::WIFI_DISCONNECTED;
+    }
+    if (code <= 0 || code >= 400) {
+      LOG_ERR("KOSync", "%s failed: stage=%d code=%d elapsed=%lu ms wifi=%d rssi=%d", method,
+              static_cast<int>(diagnostic.stage), code, static_cast<unsigned long>(diagnostic.elapsedMs),
+              static_cast<int>(WiFi.status()), WiFi.RSSI());
+    }
+    return code;
+  };
+  if (WiFi.status() != WL_CONNECTED) {
+    diagnostic.stage = Stage::WIFI_DISCONNECTED;
+    return finish(-1);
+  }
 #if defined(CROSSPOINT_ENABLE_TAILSCALE)
   if (TAILSCALE.isMagicDnsUrl(url)) {
-    return sendMagicDnsRequest(method, url, payload, withAuth, jsonBody, responseBody, maxResponseBytes);
+    return finish(sendMagicDnsRequest(method, url, payload, withAuth, jsonBody, responseBody, maxResponseBytes));
   }
-  if (!TAILSCALE.prepareUrl(url)) return -1;
+  if (!TAILSCALE.prepareUrl(url)) {
+    diagnostic.stage = Stage::TAILNET;
+    return finish(-1);
+  }
 #endif
 
   freeink::SecureHttpClient http;
   http.setInsecure();
   if (!http.begin(url)) {
-    LOG_ERR("KOSync", "Bad URL: %s", url.c_str());
-    return -1;
+    diagnostic.stage = Stage::INVALID_URL;
+    return finish(-1);
   }
   http.addHeader("Accept", "application/vnd.koreader.v1+json");
   if (withAuth) applyAuthHeaders(http);
@@ -178,19 +203,25 @@ int sendSyncRequest(const char* method, const std::string& url, const std::strin
                                 });
     if (!http.responseComplete()) {
       LOG_ERR("KOSync", "Incomplete or oversized extension response");
+      if (httpCode > 0) diagnostic.stage = Stage::INCOMPLETE_RESPONSE;
       httpCode = -1;
     }
   } else {
     httpCode = strcmp(method, "GET") == 0 ? http.GET() : http.sendRequest(method, payload);
     if (responseBody && httpCode > 0) *responseBody = http.getString();
+    if (httpCode > 0 && !http.responseComplete()) {
+      diagnostic.stage = Stage::INCOMPLETE_RESPONSE;
+      httpCode = -1;
+    }
   }
   http.end();
-  return httpCode;
+  return finish(httpCode);
 }
 }  // namespace
 
 KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
   lastHttpCode = 0;
+  lastDiagnostic = {};
   if (!KOREADER_STORE.hasCredentials()) {
     LOG_DBG("KOSync", "No credentials configured");
     return NO_CREDENTIALS;
@@ -216,6 +247,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
 
 KOReaderSyncClient::Error KOReaderSyncClient::createUser() {
   lastHttpCode = 0;
+  lastDiagnostic = {};
   if (!KOREADER_STORE.hasCredentials()) {
     LOG_DBG("KOSync", "No credentials configured");
     return NO_CREDENTIALS;
@@ -245,6 +277,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::createUser() {
 KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& documentHash,
                                                           KOReaderProgress& outProgress) {
   lastHttpCode = 0;
+  lastDiagnostic = {};
   if (!KOREADER_STORE.hasCredentials()) {
     LOG_DBG("KOSync", "No credentials configured");
     return NO_CREDENTIALS;
@@ -314,6 +347,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
 
 KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgress& progress) {
   lastHttpCode = 0;
+  lastDiagnostic = {};
   if (!KOREADER_STORE.hasCredentials()) {
     LOG_DBG("KOSync", "No credentials configured");
     return NO_CREDENTIALS;
@@ -383,6 +417,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
 KOReaderSyncClient::Error KOReaderSyncClient::postExtension(const char* suffix, const std::string& payload,
                                                             std::string& response) {
   lastHttpCode = 0;
+  lastDiagnostic = {};
   response.clear();
   if (!KOREADER_STORE.hasCredentials()) {
     LOG_ERR("KOSync", "No extension credentials configured");

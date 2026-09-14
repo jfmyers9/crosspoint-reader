@@ -5,6 +5,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <SyncDiagnosticHost.h>
 #include <TailscaleManager.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
@@ -166,6 +167,7 @@ void KOReaderSyncActivity::performSync() {
   // Fetch remote progress. In smart mode, retain the alternate document-id
   // record until both records can be mapped after the Epub is reloaded.
   auto result = KOReaderSyncClient::getProgress(documentHash, remoteProgress);
+  const auto primaryDiagnostic = KOReaderSyncClient::lastDiagnostic;
   LOG_DBG("KOSync", "Primary remote (%s): result=%d http=%d doc=%s local=%.6f remote=%.6f xpath=%s",
           matchMethodName(primaryMethod), result, KOReaderSyncClient::lastHttpCode, documentHash.c_str(),
           localProgress.percentage, remoteProgress.percentage, remoteProgress.progress.c_str());
@@ -217,7 +219,7 @@ void KOReaderSyncActivity::performSync() {
     {
       RenderLock lock(*this);
       state = SYNC_FAILED;
-      statusMessage = KOReaderSyncClient::errorString(result);
+      describeSyncFailure(result, false, primaryDiagnostic);
     }
     requestUpdate(true);
     return;
@@ -369,7 +371,7 @@ void KOReaderSyncActivity::performUpload() {
     {
       RenderLock lock(*this);
       state = SYNC_FAILED;
-      statusMessage = KOReaderSyncClient::errorString(result);
+      describeSyncFailure(result, true, KOReaderSyncClient::lastDiagnostic);
     }
     requestUpdate();
     return;
@@ -381,6 +383,53 @@ void KOReaderSyncActivity::performUpload() {
   }
   markAutoReturn();
   requestUpdate(true);
+}
+
+void KOReaderSyncActivity::describeSyncFailure(KOReaderSyncClient::Error error, bool upload,
+                                               const KOReaderSyncClient::Diagnostic& diagnostic) {
+  using Stage = KOReaderSyncClient::FailureStage;
+  failureHint = nullptr;
+  switch (error) {
+    case KOReaderSyncClient::NETWORK_ERROR:
+      switch (diagnostic.stage) {
+        case Stage::INVALID_URL:
+          statusMessage = tr(STR_SYNC_BAD_URL);
+          break;
+        case Stage::WIFI_DISCONNECTED:
+          statusMessage = tr(STR_SYNC_WIFI_LOST);
+          break;
+        case Stage::TAILNET:
+          statusMessage = tr(STR_SYNC_TAILNET_FAILED);
+          break;
+        case Stage::INCOMPLETE_RESPONSE:
+          statusMessage = tr(STR_SYNC_RESPONSE_INCOMPLETE);
+          break;
+        default:
+          statusMessage = tr(STR_SYNC_TRANSPORT_FAILED);
+          failureHint = tr(STR_SYNC_TRANSPORT_UNKNOWN);
+          break;
+      }
+      break;
+    case KOReaderSyncClient::AUTH_FAILED:
+      statusMessage = tr(STR_AUTH_FAILED);
+      break;
+    case KOReaderSyncClient::LOW_MEMORY:
+      statusMessage = tr(STR_MEMORY_ERROR);
+      break;
+    case KOReaderSyncClient::NO_CREDENTIALS:
+      statusMessage = tr(STR_NO_CREDENTIALS_MSG);
+      break;
+    case KOReaderSyncClient::JSON_ERROR:
+      statusMessage = tr(STR_SYNC_INVALID_RESPONSE);
+      break;
+    default:
+      statusMessage = tr(STR_SYNC_SERVER_FAILED);
+      break;
+  }
+  copySyncDiagnosticHost(failureServer, sizeof(failureServer), KOREADER_STORE.getBaseUrl());
+  snprintf(failureContext, sizeof(failureContext), tr(STR_SYNC_DIAGNOSTIC_FORMAT),
+           upload ? tr(STR_SYNC_SENDING) : tr(STR_SYNC_FETCHING), diagnostic.code,
+           static_cast<unsigned long>(diagnostic.elapsedMs));
 }
 
 void KOReaderSyncActivity::onEnter() {
@@ -664,6 +713,9 @@ void KOReaderSyncActivity::render(RenderLock&&) {
   if (state == SYNC_FAILED) {
     UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top, tr(STR_SYNC_FAILED_MSG), true, EpdFontFamily::BOLD);
     UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top + 40, statusMessage.c_str());
+    UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top + 80, failureServer);
+    UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top + 120, failureContext);
+    if (failureHint) UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top + 160, failureHint);
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
