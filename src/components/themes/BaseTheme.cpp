@@ -20,6 +20,7 @@
 #include "components/UiAppHelpers.h"
 #include "components/icons/bookmark.h"
 #include "fontIds.h"
+#include "util/ReadingStatusFormat.h"
 
 // Internal constants
 namespace {
@@ -77,14 +78,15 @@ void drawBookmarkStatusIcon(const GfxRenderer& renderer, const int x, const int 
 int BaseTheme::getLibraryRowHeight(freeink::ui::Screen<24>& screen) const {
   const auto& theme = screen.theme();
   const int textHeight = 2 * screen.frame().target().lineHeight(theme.bodyText.font) +
-                         screen.frame().target().lineHeight(theme.smallText.font) + 12;
+                         2 * screen.frame().target().lineHeight(theme.smallText.font) + 24;
   return std::max(LIBRARY_COVER_HEIGHT, textHeight) + 16;
 }
 
 void BaseTheme::drawLibraryBookRow(freeink::ui::Screen<24>& screen, GfxRenderer& renderer,
                                    LibraryCoverRenderer& coverRenderer, const char* title, const char* author,
                                    const char* coverPath, const UIIcon fallbackIcon, const bool selected,
-                                   const int index, const freeink::ui::ActionId action, const int rowHeight) const {
+                                   const int index, const freeink::ui::ActionId action, const int rowHeight,
+                                   const ReadingStatus::Status& readingStatus) const {
   namespace fui = freeink::ui;
   const auto& theme = screen.theme();
   auto& frame = screen.frame();
@@ -110,8 +112,15 @@ void BaseTheme::drawLibraryBookRow(freeink::ui::Screen<24>& screen, GfxRenderer&
   card.action = fui::NO_ACTION;
   card.coverSize = {64, static_cast<int16_t>(rowHeight - 16)};
   card.padding = {8, 8, 8, 8};
-  card.progressMax = 0;
-  card.textProgressGap = 0;
+  formatReadingStatus(readingStatus, coverRenderer.readingStatusText, sizeof(coverRenderer.readingStatusText));
+  card.meta = coverRenderer.readingStatusText[0] ? coverRenderer.readingStatusText : nullptr;
+  card.metaText = theme.smallText;
+  card.metaText.maxLines = 1;
+  const bool hasProgress =
+      readingStatus.state == ReadingStatus::State::Reading || readingStatus.state == ReadingStatus::State::Finished;
+  card.progressMax = hasProgress ? 100 : 0;
+  card.progress = readingStatus.state == ReadingStatus::State::Finished ? 100 : readingStatus.percent;
+  card.textProgressGap = hasProgress ? 8 : 0;
   card.centerTextVertically = true;
   card.selectionIndicator = fui::BookCardSelectionIndicator::CoverFrame;
   card.selectedCoverFrameRadius = theme.listRowRadius;

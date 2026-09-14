@@ -1,0 +1,4 @@
+add_executable(ReadingStatusFormatTest ReadingStatusFormatTest.cpp)
+target_include_directories(ReadingStatusFormatTest PRIVATE stubs ${REPO_ROOT}/src/util ${REPO_ROOT}/lib/ReadingStatus)
+target_link_libraries(ReadingStatusFormatTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(ReadingStatusFormatTest)

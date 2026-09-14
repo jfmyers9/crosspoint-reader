@@ -1,5 +1,7 @@
 #pragma once
 
+#include <ReadingStatus.h>
+
 #include <array>
 #include <memory>
 #include <string>
@@ -44,6 +46,15 @@ class FileBrowserActivity final : public UiListActivity {
   char rowNameBuf[ROW_NAME_BUF_SIZE]{};
   char rowExtBuf[16]{};
   static void provideRow(void* ctx, uint16_t index, freeink::ui::ListItem& item);
+  struct StatusRow {
+    std::string path;
+    ReadingStatus::Status status;
+    char label[32] = {};
+  };
+  // Reused visible-page storage, never sized to the directory.
+  std::vector<StatusRow> statusRows;
+  std::string statusPath;
+  const ReadingStatus::Status& statusFor(int index, int slot);
 
   // CJK fallback glyphs are prewarmed for a bounded window of rows around the
   // viewport (one SD pass per list page, like the reader TOC) instead of the
