@@ -1,6 +1,27 @@
 # File Formats
 
-These formats describe the SD-card cache files under `/.crosspoint/epub_<hash>/`.
+These formats describe SD-card records under `/.crosspoint/`.
+
+## Reading status (version 1)
+
+`reading-status/<64-bit-FNV-1a-path-hash>.bin` stores durable reading state,
+independently of disposable EPUB and library caches. Removing all of
+`/.crosspoint/` also removes these records.
+
+The eight-byte header contains `R`, `S`, version `1`, state (`1` unread,
+`2` reading, `3` finished), integer percentage, reserved zero, then a
+little-endian u16 source-path byte length. The full UTF-8 source path follows
+without a terminator; its length and contents must match on read. Missing,
+truncated, or invalid records mean unknown, never unread. Unread uses 0%,
+reading uses 0–99%, and finished uses 100%.
+
+Writes skip unchanged values. A complete `.tmp` is flushed and closed before
+replacement; the previous `.bin` is renamed to `.bak` first, so readers can
+recover it if replacement is interrupted. FAT directory operations are not
+transactional. Finished is sticky until manually marked unread. Reader saves
+update percentage only with a valid chapter page count; applying remote sync
+uses its known fraction directly. Reaching the end-of-book screen marks finished.
+Moving a finished book to `/Read` transfers this record to its new path.
 
 ## Library preview cache (version 1)
 

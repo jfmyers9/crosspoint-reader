@@ -19,12 +19,14 @@
 #include "RecentBooksStore.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
+#include "components/OptionPopup.h"
 #include "components/UIScale.h"
 #include "components/UITheme.h"
 #include "components/icons/search32.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
 #include "util/LibraryCoverLoader.h"
+#include "util/ReadingStatusFormat.h"
 
 namespace fui = freeink::ui;
 
@@ -95,6 +97,7 @@ LibraryListActivity::LibraryListActivity(GfxRenderer& renderer, MappedInputManag
 }
 
 void LibraryListActivity::onEnter() {
+  statusRows.clear();
   // One lock across the base lifecycle AND the data phase: the base onEnter
   // schedules a paint, and the render task must not read the index or the
   // filter before they are in place. The rebuild also needs the lock: the
@@ -160,7 +163,7 @@ void LibraryListActivity::loop() {
 }
 
 void LibraryListActivity::serviceCovers() {
-  if (!covers) return;
+  if (!covers || (optionsPopup && optionsPopup->isActive())) return;
   bool redraw = false;
   {
     RenderLock lock(RenderLock::Mode::Try);
@@ -323,15 +326,38 @@ void LibraryListActivity::activateIndex(const int index) {
   }
 }
 
-// Row long-press prompts delete wherever grouping does not own the gesture:
-// the Recent sort has no groups, and an active search is already a flat list
-// the reader narrowed down on purpose ("find it, hold it, delete it").
-// Unfiltered Title/Author lists keep collapse-to-groups. Pinned rows are the
-// exception: holding one offers remove-from-recents, as the old Recent tab
-// did.
+// Book options retain the context action: delete in flat lists, collapse in
+// grouped lists, and remove-from-recents for pinned rows.
 bool LibraryListActivity::deleteEligible() const { return !groupsCollapsed && (!query.empty() || !groupable()); }
 
 void LibraryListActivity::onRowLongPress(const int index) {
+  if (!groupsCollapsed) {
+    showBookOptions(index);
+    return;
+  }
+  activateIndex(index);
+}
+
+void LibraryListActivity::showBookOptions(const int entry) {
+  if (entry < 0 || entry >= bookRowCount()) return;
+  stopCovers();
+  RenderLock lock(*this);
+  app.clearTapFlash();
+  if (!optionsPopup) optionsPopup = makeUniqueNoThrow<OptionPopup>();
+  if (!optionsPopup) {
+    LOG_ERR("LIB", "OOM: book options");
+    return;
+  }
+  optionsEntry = entry;
+  const StrId actions[] = {StrId::STR_OPEN, StrId::STR_MARK_FINISHED, StrId::STR_MARK_UNREAD,
+                           entry < pinnedCount() ? StrId::STR_REMOVE_FROM_RECENTS
+                           : deleteEligible()    ? StrId::STR_DELETE
+                                                 : StrId::STR_COLLAPSE_GROUPS};
+  optionsPopup->show(StrId::STR_BROWSER_OPTIONS, actions, 4, 0, [this](int option) { pendingOption = option; });
+  requestUpdate();
+}
+
+void LibraryListActivity::applyContextOption(const int index) {
   if (index < pinnedCount()) {
     const auto& books = RECENT_BOOKS.getBooks();
     if (index < 0 || index >= static_cast<int>(books.size())) return;
@@ -709,6 +735,32 @@ bool LibraryListActivity::rowTextFor(const int entry, std::string& title, std::s
 }
 
 bool LibraryListActivity::handleCustomInput() {
+  if (optionsPopup && optionsPopup->isActive()) {
+    {
+      RenderLock lock(*this);
+      optionsPopup->handleInput(mappedInput, [this] { requestUpdate(); });
+    }
+    const int option = pendingOption;
+    pendingOption = -1;
+    if (option == 0) {
+      openSelectedBook();
+    } else if (option == 1 || option == 2) {
+      stopCovers();
+      RenderLock lock(*this);
+      if (pathFor(optionsEntry, statusPath)) {
+        if (!ReadingStatus::mark(statusPath,
+                                 option == 1 ? ReadingStatus::State::Finished : ReadingStatus::State::Unread)) {
+          static constexpr StrId dismiss[] = {StrId::STR_OK_BUTTON};
+          optionsPopup->show(StrId::STR_READING_STATUS_SAVE_FAILED, dismiss, 1, 0, [](int) {});
+        }
+        statusRows.clear();
+      }
+      requestUpdate();
+    } else if (option == 3) {
+      applyContextOption(optionsEntry);
+    }
+    return true;
+  }
   if (lockNextConfirmRelease && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     lockNextConfirmRelease = false;
     return true;
@@ -733,18 +785,8 @@ bool LibraryListActivity::handleButtons() {
   if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, LONG_PRESS_MS)) {
     if (tabsFocused()) {
       if (!degraded) toggleSortDirection();
-    } else if (selectedEntry() < pinnedCount()) {
-      const auto& books = RECENT_BOOKS.getBooks();
-      if (selectedEntry() < static_cast<int>(books.size())) {
-        const auto& book = books[static_cast<size_t>(selectedEntry())];
-        promptRemoveRecentBook(book.path, book.title);
-      }
-    } else if (deleteEligible()) {
-      if (count > 0) promptDeleteBook(selectedEntry());
-    } else if (!groupsCollapsed && groupable()) {
-      collapseGroups(selectedEntry());
     } else {
-      activateIndex(selectedEntry());
+      onRowLongPress(selectedEntry());
     }
     return true;
   }
@@ -847,6 +889,7 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
   if (!groupsCollapsed && winHeaders.size() < cap) winHeaders.resize(cap);
   winItems.clear();
   if (winItems.capacity() < cap) winItems.reserve(cap);
+  statusRows.resize(cap);
 
   int rows = 0;
   int headers = 0;
@@ -887,6 +930,8 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
         item.sectionHeading = heading.c_str();
       }
       if (!authorGrouped && !author.empty()) item.subtitle = author.c_str();
+      statusFor(entry, rows);
+      if (statusRows[rows].label[0]) item.value = statusRows[rows].label;
     }
 
     item.label = title.c_str();
@@ -909,6 +954,17 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
           next < rows ? winItems[static_cast<size_t>(next)].label : "<none>");
   LOG_DBG("LIB", "page first=%d title=%s", rows > 0 ? winItems[0].actionValue : -1,
           rows > 0 ? winItems[0].label : "<none>");
+}
+
+const ReadingStatus::Status& LibraryListActivity::statusFor(const int entry, const int slot) {
+  auto& row = statusRows[slot];
+  if (!pathFor(entry, statusPath)) statusPath.clear();
+  if (row.path != statusPath) {
+    row.path = statusPath;
+    row.status = statusPath.empty() ? ReadingStatus::Status{} : ReadingStatus::load(statusPath);
+    formatReadingStatus(row.status, row.label, sizeof(row.label));
+  }
+  return row.status;
 }
 
 void LibraryListActivity::buildCoverRows(UiScreen& screen) {
@@ -949,13 +1005,15 @@ void LibraryListActivity::buildCoverRows(UiScreen& screen) {
     }
   }
   bool loading = false;
+  statusRows.resize(count);
   for (int slot = 0; slot < count; ++slot) {
     const int entry = navigation.top + slot;
     auto& row = state.rows[slot];
     rowTextFor(entry, state.title, state.author);
     GUI.drawLibraryBookRow(screen, renderer, state.renderer, state.title.c_str(),
                            state.author.empty() ? nullptr : state.author.c_str(), row.thumbnail.c_str(),
-                           UITheme::getFileIcon(row.path), entry == viewport.selectedIndex, entry, ACTION_ROW, height);
+                           UITheme::getFileIcon(row.path), entry == viewport.selectedIndex, entry, ACTION_ROW, height,
+                           statusFor(entry, slot));
     loading |= !row.loaded && FsHelpers::hasEpubExtension(row.path);
   }
   navigation.onListRendered(
@@ -1075,12 +1133,8 @@ void LibraryListActivity::drawHoldHelp() const {
   const char* help = nullptr;
   if (tabsFocused() && !degraded)
     help = tr(STR_LIBRARY_HOLD_SORT);
-  else if (!tabsFocused() && selectedEntry() < pinnedCount())
-    help = tr(STR_HOLD_OPEN_TO_REMOVE);  // pinned recents: hold removes from the list
-  else if (!tabsFocused() && deleteEligible() && listCount() > 0)
-    help = tr(STR_HOLD_OPEN_TO_DELETE);
-  else if (!tabsFocused() && groupable())
-    help = tr(STR_LIBRARY_HOLD_GROUPS);
+  else if (!tabsFocused() && listCount() > 0)
+    help = tr(STR_HOLD_FOR_OPTIONS);
   if (!help) return;
 
   const auto& metrics = UITheme::getInstance().getMetrics();
@@ -1090,6 +1144,12 @@ void LibraryListActivity::drawHoldHelp() const {
 }
 
 void LibraryListActivity::drawFooter() {
+  if (optionsPopup && optionsPopup->isActive()) {
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    optionsPopup->render(renderer);
+    return;
+  }
   drawPositionReadout();
   drawHoldHelp();
 

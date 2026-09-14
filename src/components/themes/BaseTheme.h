@@ -2,6 +2,7 @@
 
 #include <Bitmap.h>
 #include <FreeInkApp.h>
+#include <ReadingStatus.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -229,6 +230,7 @@ struct LibraryCoverRenderer {
   uint8_t rawRow[24]{};
   GfxRenderer* renderer = nullptr;
   const char* coverPath = nullptr;
+  char readingStatusText[32]{};
 };
 
 class BaseTheme {
@@ -276,7 +278,8 @@ class BaseTheme {
   int getLibraryRowHeight(freeink::ui::Screen<24>& screen) const;
   void drawLibraryBookRow(freeink::ui::Screen<24>& screen, GfxRenderer& renderer, LibraryCoverRenderer& coverRenderer,
                           const char* title, const char* author, const char* coverPath, UIIcon fallbackIcon,
-                          bool selected, int index, freeink::ui::ActionId action, int rowHeight) const;
+                          bool selected, int index, freeink::ui::ActionId action, int rowHeight,
+                          const ReadingStatus::Status& readingStatus = {}) const;
 
   // Shared constants and helpers for battery drawing (used by all themes)
   static constexpr int batteryPercentSpacing = 4;

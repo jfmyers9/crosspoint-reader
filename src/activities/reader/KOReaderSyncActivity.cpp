@@ -94,6 +94,9 @@ void KOReaderSyncActivity::saveProgressAndReturn(int spineIndex, int page) {
     requestUpdate(true);
     return;
   }
+  if (!ReadingStatus::update(epubPath, remoteProgress.percentage, remoteProgress.percentage == 1.0f)) {
+    LOG_ERR("KOSync", "Failed to save library reading status");
+  }
   returnToReader();
 }
 

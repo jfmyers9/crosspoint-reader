@@ -143,6 +143,7 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
   }
 
   RECENT_BOOKS.updatePath(srcPath, dstPath, oldCachePath, newCachePath);
+  if (!ReadingStatus::move(srcPath, dstPath)) LOG_ERR("ERS", "Failed to move reading status");
   if (APP_STATE.openEpubPath == srcPath) {
     APP_STATE.openEpubPath = dstPath;
     APP_STATE.saveToFile();
@@ -1480,6 +1481,9 @@ void EpubReaderActivity::renderBook() {
 }
 
 void EpubReaderActivity::onEndOfBookRendered() {
+  if (epub && epub->getSpineItemsCount() > 0 && !ReadingStatus::mark(epub->getPath(), ReadingStatus::State::Finished)) {
+    LOG_ERR("ERS", "Failed to mark book finished");
+  }
   automaticPageTurnActive = false;
   if (pendingSyncSaveError) {
     pendingSyncSaveError = false;

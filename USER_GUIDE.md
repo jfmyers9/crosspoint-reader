@@ -119,7 +119,7 @@ The Browse Files screen acts as a file and folder browser. The full path to the 
 
 * **Navigate List:** Use **Left** (or **Side Up**), or **Right** (or **Side Down**) to move the selection cursor up and down through folders and books. You can also long-press these buttons to scroll a full page up or down.
 * **Open Selection:** Press **Confirm** to open a folder or start reading a selected book. Selecting a `.bmp` file will open the image viewer.
-* **Book Options:** Hold **Confirm** for one second and release, or long-press a row on a touch device, to open **Open**, **Delete**, and **File browser view** options. **Delete** asks for confirmation before removing the selected file or folder.
+* **Book Options:** Hold **Confirm** for one second and release, or long-press a row on a touch device, to open **Open**, **Delete**, and **File browser view** options. Books also offer **Mark finished** and **Mark unread**. **Delete** asks for confirmation before removing the selected file or folder.
 * **File Browser View:** Choose **Settings → Display → File browser view → Cover list** for small covers, book titles, and authors. **Compact list** is the default. You can also change this from **Book Options** by holding Confirm or long-pressing a book. The choice applies to every folder and survives a restart; switching views keeps the selected book. This setting does not change the separate Library screen.
 
 Cover list prepares visible EPUBs in the background and stores previews on the SD card. Filenames and placeholder icons appear while **Loading covers…** is shown; navigation remains available. Folders and other file formats retain their names and icons. Missing or unsupported covers use a placeholder. Opening a book or leaving the browser may briefly wait for an in-progress cover decode to finish safely. **Clear cache** also removes these previews.
@@ -136,15 +136,19 @@ The Library indexes up to 4,096 supported books on the SD card and shows their t
 
 Enable **Settings → Display → Library covers** for a cover-list layout on the Library screen. This is off by default and independent of **File browser view**. Titles and authors still come from the Library index; visible EPUB thumbnails load in the background using the same SD preview cache as Browse Files. Missing or unsupported covers use placeholders. Sorting, search, and grouping keep working; collapsed groups remain compact lists.
 
+Book rows in Library and Browse Files also show saved reading status: **Unread**, a percentage, or **Finished**. Cover rows include a progress bar. Status is blank when no reliable status has been recorded, including older books not yet read with this firmware. EPUB reading and applied KOReader sync positions update the status. Reaching the end marks the book finished; opening it again does not clear that flag.
+
+Hold a book row to open its options and choose **Mark finished** or **Mark unread**. Mark unread clears the finished flag without resetting the saved reading position; continuing to read updates the percentage again. Status is stored separately from rendering caches, so clearing those caches does not erase it.
+
 On a button-only device:
 
 - Use **Up/Down** or **Left/Right** to move one row at a time. Hold a direction to move a page at a time.
 - Press **Confirm** to open the selected book.
 - Press **Back** from the book list to focus the tabs. Use **Left/Right** to select another tab, press **Confirm** to reverse its sort direction, or press **Down** to return to the list.
 - While the tabs are focused, hold **Confirm** to open Search.
-- In the Title or Author views, hold **Confirm** on a book to collapse the list to its letter or author groups. The matching group remains selected. Press **Confirm** to enter a group, or **Back** to restore the exact book and position you came from.
+- In the Title or Author views, hold **Confirm** on a book and choose **Collapse groups** to show its letter or author groups. The matching group remains selected. Press **Confirm** to enter a group, or **Back** to restore the exact book and position you came from.
 
-On a touch device, tap tabs, books, and the Search icon directly. Tap an active indexed tab again to reverse its sort direction. Swipe to scroll. Long-press a book in the Recent view to remove it from the list. Long-press a book in a Title or Author view to collapse to the group list, then tap a group to expand it. The **Added** view is not grouped; tapping or long-pressing a book opens it.
+On a touch device, tap tabs, books, and the Search icon directly. Tap an active indexed tab again to reverse its sort direction. Swipe to scroll. Long-press a book to open its options, including reading status and the available remove, delete, or collapse action. Tap a collapsed group to expand it.
 
 The index is created automatically the first time the Library is opened. To pick up later file changes or updated metadata, use **Settings → System → Rebuild library index**. The **Use book metadata** setting controls whether the index reads titles and authors stored inside books.
 

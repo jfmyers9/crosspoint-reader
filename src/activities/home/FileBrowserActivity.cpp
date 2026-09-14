@@ -17,6 +17,7 @@
 #include "components/UiAppHelpers.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/ReadingStatusFormat.h"
 
 namespace fui = freeink::ui;
 
@@ -37,6 +38,7 @@ FileBrowserActivity::FileBrowserActivity(GfxRenderer& renderer, MappedInputManag
 FileBrowserActivity::~FileBrowserActivity() = default;
 
 void FileBrowserActivity::loadFiles() {
+  statusRows.clear();
   ++folderGeneration;
   coverTop = -1;
   files.clear();
@@ -222,6 +224,7 @@ void FileBrowserActivity::serviceCoverLoader() {
 
 void FileBrowserActivity::showOptions(bool viewOnly) {
   if (mode != Mode::Books) return;
+  stopCoverLoader();
   RenderLock lock(*this);
   app.clearTapFlash();
   if (!optionsPopup) {
@@ -233,10 +236,15 @@ void FileBrowserActivity::showOptions(bool viewOnly) {
   }
   choosingView = viewOnly || files.empty();
   static constexpr StrId views[] = {StrId::STR_COMPACT_LIST, StrId::STR_COVER_LIST};
-  static constexpr StrId actions[] = {StrId::STR_OPEN, StrId::STR_DELETE, StrId::STR_LIBRARY_VIEW};
+  static constexpr StrId actions[] = {StrId::STR_OPEN, StrId::STR_DELETE, StrId::STR_LIBRARY_VIEW,
+                                      StrId::STR_MARK_FINISHED, StrId::STR_MARK_UNREAD};
+  const bool book =
+      nav.selected >= 0 && nav.selected < listCount() &&
+      (FsHelpers::hasEpubExtension(files[nav.selected]) || FsHelpers::hasXtcExtension(files[nav.selected]) ||
+       FsHelpers::hasTxtExtension(files[nav.selected]) || FsHelpers::hasMarkdownExtension(files[nav.selected]));
   optionsPopup->show(choosingView ? StrId::STR_LIBRARY_VIEW : StrId::STR_BROWSER_OPTIONS,
-                     choosingView ? views : actions, choosingView ? 2 : 3, choosingView ? SETTINGS.libraryView : 0,
-                     [this](int option) { pendingOption = option; });
+                     choosingView ? views : actions, choosingView ? 2 : (book ? 5 : 3),
+                     choosingView ? SETTINGS.libraryView : 0, [this](int option) { pendingOption = option; });
   lock.unlock();
   requestUpdate();
 }
@@ -458,6 +466,21 @@ bool FileBrowserActivity::handleCustomInput() {
         }
       } else if (option == 2) {
         showOptions(true);
+      } else if (option == 3 || option == 4) {
+        stopCoverLoader();
+        RenderLock lock(*this);
+        if (nav.selected >= 0 && nav.selected < listCount()) {
+          statusPath = basepath;
+          if (statusPath.back() != '/') statusPath += '/';
+          statusPath += files[nav.selected];
+          if (!ReadingStatus::mark(statusPath,
+                                   option == 3 ? ReadingStatus::State::Finished : ReadingStatus::State::Unread)) {
+            static constexpr StrId dismiss[] = {StrId::STR_OK_BUTTON};
+            optionsPopup->show(StrId::STR_READING_STATUS_SAVE_FAILED, dismiss, 1, 0, [](int) {});
+          }
+          statusRows.clear();
+        }
+        requestUpdate();
       } else {
         activateSelected(option == 1);
       }
@@ -634,11 +657,39 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   label.maxLines = 2;
   props.labelText = label;
 
-  // The trailing value here is just the short extension: skip the balanced
-  // 60%-band wrap cap and let both name lines run the full width before it.
+  // Keep both name lines available beside the compact status/extension value.
   props.balanceWrappedLabelWithValue = false;
   syncListViewport(screen, props);
+  if (mode == Mode::Books) {
+    const int count = std::min(listCount() - nav.top, std::max(1, nav.visibleRows) + 1);
+    statusRows.resize(count);
+    visibleItems.clear();
+    visibleItems.reserve(count);
+    for (int slot = 0; slot < count; ++slot) {
+      const int index = nav.top + slot;
+      auto item = rowItems[index];
+      statusFor(index, slot);
+      if (statusRows[slot].label[0]) item.value = statusRows[slot].label;
+      visibleItems.push_back(item);
+    }
+    props.items = visibleItems.data();
+    props.itemsWindowFirst = static_cast<uint16_t>(nav.top);
+    props.itemsWindowCount = static_cast<uint16_t>(count);
+  }
   screen.list(props);
+}
+
+const ReadingStatus::Status& FileBrowserActivity::statusFor(const int index, const int slot) {
+  auto& row = statusRows[slot];
+  statusPath = basepath;
+  if (statusPath.back() != '/') statusPath += '/';
+  statusPath += files[index];
+  if (row.path != statusPath) {
+    row.path = statusPath;
+    row.status = files[index].back() == '/' ? ReadingStatus::Status{} : ReadingStatus::load(statusPath);
+    formatReadingStatus(row.status, row.label, sizeof(row.label));
+  }
+  return row.status;
 }
 
 void FileBrowserActivity::buildCoverList(UiScreen& screen) {
@@ -669,13 +720,15 @@ void FileBrowserActivity::buildCoverList(UiScreen& screen) {
       row.loaded = false;
     }
   }
+  statusRows.resize(count);
   for (int slot = 0; slot < count; ++slot) {
     const int index = nav.top + slot;
     const auto& details = coverRows[slot].details;
-    GUI.drawLibraryBookRow(
-        screen, renderer, *coverRenderer, details.title.empty() ? rowNames[index].c_str() : details.title.c_str(),
-        details.author.empty() ? nullptr : details.author.c_str(), details.coverPath.c_str(),
-        UITheme::getFileIcon(files[index]), index == viewport.selectedIndex, index, ACTION_ROW, rowHeight);
+    GUI.drawLibraryBookRow(screen, renderer, *coverRenderer,
+                           details.title.empty() ? rowNames[index].c_str() : details.title.c_str(),
+                           details.author.empty() ? nullptr : details.author.c_str(), details.coverPath.c_str(),
+                           UITheme::getFileIcon(files[index]), index == viewport.selectedIndex, index, ACTION_ROW,
+                           rowHeight, statusFor(index, slot));
   }
   nav.onListRendered(static_cast<uint16_t>(nav.top), count,
                      viewport.selectedIndex >= nav.top && viewport.selectedIndex < nav.top + count);

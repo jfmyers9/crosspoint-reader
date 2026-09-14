@@ -1,5 +1,7 @@
 #pragma once
 
+#include <ReadingStatus.h>
+
 #include <array>
 #include <memory>
 #include <string>
@@ -41,6 +43,16 @@ class FileBrowserActivity final : public UiListActivity {
   // paused underneath (e.g. a Settings screen reached via a picker flow)
   // invalidates the cached rows on return instead of rendering stale ones.
   bool rowsUseFileIcons = false;
+  struct StatusRow {
+    std::string path;
+    ReadingStatus::Status status;
+    char label[32] = {};
+  };
+  // Reused visible-page storage, never sized to the directory.
+  std::vector<StatusRow> statusRows;
+  std::vector<freeink::ui::ListItem> visibleItems;
+  std::string statusPath;
+  const ReadingStatus::Status& statusFor(int index, int slot);
 
   static constexpr int MAX_COVER_ROWS = 8;
   struct CoverRow {
