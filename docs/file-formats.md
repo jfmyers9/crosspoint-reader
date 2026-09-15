@@ -23,12 +23,23 @@ update percentage only with a valid chapter page count; applying remote sync
 uses its known fraction directly. Reaching the end-of-book screen marks finished.
 Moving a finished book to `/Read` transfers this record to its new path.
 
+Library displays missing or invalid status as **No saved progress** in both layouts.
+Browse Files does not display or edit reading status.
+
+## Library layout setting
+
+`settings.json` stores `libraryLayout` as `0` (compact) or `1` (covers).
+When that key is absent, the former `libraryCoverView` boolean or numeric
+`0`/`1` value is migrated. Invalid values fall back to compact. The old
+`libraryView` key belonged to Browse Files and is ignored, not migrated to
+Library. Retired keys are removed when settings are resaved.
+
 ## Library preview cache (version 1)
 
-The cover-list browser stores disposable previews separately under
+The Library cover list stores disposable previews separately under
 `/.crosspoint/library/epub_<path-hash>/`. Each thumbnail height has a
 `details_<height>.bin` and, when available, a monochrome `thumb_<height>.bmp`.
-Reader progress, spine, TOC, and CSS caches are not created by the browser.
+Reader progress, spine, TOC, and CSS caches are not created by the preview loader.
 
 The details header is 24 bytes, little-endian, in this order:
 
@@ -48,7 +59,7 @@ source or invalid thumbnail rebuilds the preview. A same-size replacement
 preserving the FAT timestamp requires removing that book's library cache.
 Missing or unsupported covers are cached; extraction, SD, and decoder failures
 remain retryable. Previews currently support EPUB only. Oversized OPF documents
-(over 128 KiB) or guide cover wrappers (over 16 KiB) retain browser placeholders.
+(over 128 KiB) or guide cover wrappers (over 16 KiB) retain Library placeholders.
 All POD fields are written in the ESP32 little-endian representation used by
 `Serialization.h`; strings are length-prefixed UTF-8.
 

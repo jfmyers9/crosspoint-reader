@@ -1,17 +1,11 @@
 #pragma once
 
-#include <ReadingStatus.h>
-
-#include <array>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "activities/UiListActivity.h"
-#include "util/LibraryBookDetails.h"
-#include "util/LibraryCoverLoader.h"
 
-class LibraryCoverRenderer;
 class OptionPopup;
 
 class FileBrowserActivity final : public UiListActivity {
@@ -43,42 +37,9 @@ class FileBrowserActivity final : public UiListActivity {
   // paused underneath (e.g. a Settings screen reached via a picker flow)
   // invalidates the cached rows on return instead of rendering stale ones.
   bool rowsUseFileIcons = false;
-  struct StatusRow {
-    std::string path;
-    ReadingStatus::Status status;
-    char label[32] = {};
-  };
-  // Reused visible-page storage, never sized to the directory.
-  std::vector<StatusRow> statusRows;
-  std::vector<freeink::ui::ListItem> visibleItems;
-  std::string statusPath;
-  const ReadingStatus::Status& statusFor(int index, int slot);
-
-  static constexpr int MAX_COVER_ROWS = 8;
-  struct CoverRow {
-    LibraryBookDetails details;
-    bool loaded = false;
-  };
-  std::array<CoverRow, MAX_COVER_ROWS> coverRows;
-  std::unique_ptr<LibraryCoverRenderer> coverRenderer;
   std::unique_ptr<OptionPopup> optionsPopup;
   int pendingOption = -1;
-  bool choosingView = false;
-  bool leaving = false;
-  bool coverAllocationFailed = false;
-  int coverTop = -1;
-  int coverCount = 0;
-  uint32_t folderGeneration = 0;
-  uint32_t pageChangedAt = 0;
-  uint32_t detailsRenderedAt = 0;
-  bool detailsDirty = false;
-  LibraryCoverLoader coverLoader;
-
-  bool coverView() const;
-  void buildCoverList(UiScreen& screen);
-  void serviceCoverLoader();
-  void stopCoverLoader();
-  void showOptions(bool viewOnly = false);
+  void showOptions();
 
   void rebuildRowItems();
 
@@ -87,15 +48,14 @@ class FileBrowserActivity final : public UiListActivity {
   void activateIndex(int index) override;
   void onRowLongPress(int index) override;
   // Long-press BACK goes to root; short Back goes up a directory (home/cancel at
-  // root), and Confirm activates on RELEASE (a hold is "delete").
+  // root), and Confirm activates on RELEASE (a hold opens file options).
   bool handleCustomInput() override;
   bool handleButtons() override;
   // Header shows the current folder name (battery indicator via GUI.drawHeader);
   // footer labels depend on path depth and picker mode.
   void drawChrome() override;
   void drawFooter() override;
-  // forceDelete routes the touch long-press to the delete branch; button
-  // navigation leaves it false and relies on getHeldTime() instead.
+  // forceDelete selects deletion from the file options menu.
   void activateSelected(bool forceDelete = false);
 
   // Data loading
@@ -108,7 +68,4 @@ class FileBrowserActivity final : public UiListActivity {
   ~FileBrowserActivity() override;
   void onEnter() override;
   void onExit() override;
-  void loop() override;
-  bool preventAutoSleep() override { return coverLoader.working(); }
-  bool skipLoopDelay() override { return coverLoader.working(); }
 };

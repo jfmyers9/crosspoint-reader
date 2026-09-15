@@ -17,7 +17,7 @@ inline void formatReadingStatus(const ReadingStatus::Status& status, char* outpu
       snprintf(output, capacity, tr(STR_READING_PERCENT_FORMAT), static_cast<unsigned>(status.percent));
       break;
     default:
-      if (capacity) output[0] = '\0';
+      snprintf(output, capacity, "%s", tr(STR_READING_UNKNOWN));
       break;
   }
 }

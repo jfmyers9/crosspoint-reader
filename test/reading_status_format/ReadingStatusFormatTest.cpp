@@ -2,10 +2,10 @@
 
 #include "ReadingStatusFormat.h"
 
-TEST(ReadingStatusFormat, ShowsKnownStatesAndLeavesUnknownBlank) {
+TEST(ReadingStatusFormat, ShowsKnownStatesAndExplainsMissingProgress) {
   char text[32];
   formatReadingStatus({}, text, sizeof(text));
-  EXPECT_STREQ(text, "");
+  EXPECT_STREQ(text, "No saved progress");
   formatReadingStatus({ReadingStatus::State::Unread, 0}, text, sizeof(text));
   EXPECT_STREQ(text, "Unread");
   formatReadingStatus({ReadingStatus::State::Reading, 37}, text, sizeof(text));
