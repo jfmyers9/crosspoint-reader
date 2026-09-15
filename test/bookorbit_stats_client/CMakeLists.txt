@@ -1,7 +1,6 @@
 find_path(BOOKORBIT_ARDUINOJSON_INCLUDE ArduinoJson.h
   PATHS "${REPO_ROOT}/.pio/libdeps/default/ArduinoJson/src"
-        "${REPO_ROOT}/.pio/libdeps/x4pro/ArduinoJson/src"
-        "${REPO_ROOT}/.pio/libdeps/x4pro_tailscale/ArduinoJson/src")
+        "${REPO_ROOT}/.pio/libdeps/x4pro/ArduinoJson/src")
 if(NOT BOOKORBIT_ARDUINOJSON_INCLUDE)
   FetchContent_Declare(bookorbit_arduinojson
     GIT_REPOSITORY https://github.com/bblanchon/ArduinoJson.git
