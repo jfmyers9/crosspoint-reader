@@ -5,6 +5,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
+#include <ReadingStatus.h>
 #include <Utf8.h>
 
 #include <algorithm>
@@ -22,7 +23,6 @@
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
 #include "util/BookmarkUtil.h"
-#include "util/ReadingStatusFormat.h"
 
 namespace fui = freeink::ui;
 
@@ -92,9 +92,6 @@ FileBrowserActivity::FileBrowserActivity(GfxRenderer& renderer, MappedInputManag
 FileBrowserActivity::~FileBrowserActivity() = default;
 
 void FileBrowserActivity::loadFiles() {
-  statusRows.clear();
-  ++folderGeneration;
-  coverTop = -1;
   files.clear();
   prewarmedStart = -1;  // new folder contents: re-prewarm the visible window
 
@@ -166,11 +163,6 @@ void FileBrowserActivity::provideRow(void* ctx, const uint16_t index, fui::ListI
   if (self->rowExtBuf[0] != '\0') {
     item.value = self->rowExtBuf;
   }
-  const int slot = static_cast<int>(index) - self->nav.top;
-  if (self->mode == Mode::Books && slot >= 0 && slot < static_cast<int>(self->statusRows.size())) {
-    self->statusFor(index, slot);
-    if (self->statusRows[slot].label[0]) item.value = self->statusRows[slot].label;
-  }
   item.icon = listIconFor(UITheme::getFileIcon(entry));
   item.actionValue = static_cast<int16_t>(index);
 }
@@ -239,93 +231,27 @@ void FileBrowserActivity::onEnter() {
 }
 
 void FileBrowserActivity::onExit() {
-  stopCoverLoader();
   Activity::onExit();
   files.clear();
   fileNameBuffer.reset();
-  coverRenderer.reset();
   optionsPopup.reset();
 }
 
-bool FileBrowserActivity::coverView() const {
-  return mode == Mode::Books && SETTINGS.libraryView == CrossPointSettings::COVER_LIST && !coverAllocationFailed;
-}
-
-void FileBrowserActivity::loop() {
-  leaving = false;
-  UiListActivity::loop();
-  if (!leaving) serviceCoverLoader();
-}
-
-void FileBrowserActivity::stopCoverLoader() { coverLoader.stop(); }
-
-void FileBrowserActivity::serviceCoverLoader() {
-  bool changed = false;
-  {
-    RenderLock lock(RenderLock::Mode::Try);
-    if (!lock) return;
-    LibraryBookDetails loadResult;
-    int loadIndex;
-    uint32_t loadGeneration;
-    if (coverLoader.takeResult(loadResult, loadIndex, loadGeneration)) {
-      const int slot = loadIndex - coverTop;
-      if (loadGeneration == folderGeneration && slot >= 0 && slot < coverCount) {
-        coverRows[slot].details = std::move(loadResult);
-        coverRows[slot].loaded = true;
-        detailsDirty = true;
-      }
-    }
-    if (coverView() && coverRenderer && coverTop >= 0 && !coverLoader.failed() && !coverLoader.working() &&
-        !coverLoader.ready() && millis() - pageChangedAt >= 250 && !(optionsPopup && optionsPopup->isActive())) {
-      for (int slot = 0; slot < coverCount; ++slot) {
-        if (coverRows[slot].loaded) continue;
-        const int index = coverTop + slot;
-        if (!FsHelpers::hasEpubExtension(files[index])) {
-          coverRows[slot].loaded = true;
-          continue;
-        }
-        std::string loadPath = basepath;
-        if (loadPath.back() != '/') loadPath += '/';
-        loadPath += files[index];
-        if (!coverLoader.start(loadPath, index, folderGeneration)) changed = true;
-        break;
-      }
-    }
-    bool complete = true;
-    for (int slot = 0; slot < coverCount; ++slot) complete &= coverRows[slot].loaded;
-    if (detailsDirty && (complete || millis() - detailsRenderedAt >= 1500)) {
-      detailsDirty = false;
-      detailsRenderedAt = millis();
-      changed = true;
-    }
-  }
-  if (changed) requestUpdate();
-}
-
-void FileBrowserActivity::showOptions(bool viewOnly) {
-  if (mode != Mode::Books) return;
-  stopCoverLoader();
+void FileBrowserActivity::showOptions() {
+  if (mode != Mode::Books || files.empty()) return;
   RenderLock lock(*this);
   app.clearTapFlash();
   if (!optionsPopup) {
     optionsPopup = makeUniqueNoThrow<OptionPopup>();
     if (!optionsPopup) {
-      LOG_ERR("FileBrowser", "OOM: library options");
+      LOG_ERR("FileBrowser", "OOM: file options");
       return;
     }
   }
-  choosingView = viewOnly || files.empty();
-  static constexpr StrId views[] = {StrId::STR_COMPACT_LIST, StrId::STR_COVER_LIST};
-  static constexpr StrId actions[] = {StrId::STR_OPEN,   StrId::STR_DELETE,        StrId::STR_LIBRARY_VIEW,
-                                      StrId::STR_RENAME, StrId::STR_MARK_FINISHED, StrId::STR_MARK_UNREAD};
+  static constexpr StrId actions[] = {StrId::STR_OPEN, StrId::STR_DELETE, StrId::STR_RENAME};
   const bool canRename = nav.selected >= 0 && nav.selected < listCount() && files[nav.selected].back() != '/';
-  const bool book =
-      nav.selected >= 0 && nav.selected < listCount() &&
-      (FsHelpers::hasEpubExtension(files[nav.selected]) || FsHelpers::hasXtcExtension(files[nav.selected]) ||
-       FsHelpers::hasTxtExtension(files[nav.selected]) || FsHelpers::hasMarkdownExtension(files[nav.selected]));
-  optionsPopup->show(choosingView ? StrId::STR_LIBRARY_VIEW : StrId::STR_BROWSER_OPTIONS,
-                     choosingView ? views : actions, choosingView ? 2 : (book ? 6 : (canRename ? 4 : 3)),
-                     choosingView ? SETTINGS.libraryView : 0, [this](int option) { pendingOption = option; });
+  optionsPopup->show(StrId::STR_BROWSER_OPTIONS, actions, canRename ? 3 : 2, 0,
+                     [this](int option) { pendingOption = option; });
   lock.unlock();
   requestUpdate();
 }
@@ -421,6 +347,7 @@ void FileBrowserActivity::activateIndex(const int index) {
 
 void FileBrowserActivity::onRowLongPress(const int index) {
   (void)index;  // base already synced nav.selected to the pressed row
+  // Clear the row flash before displaying the popup.
   app.clearTapFlash();
   if (mode == Mode::Books) {
     showOptions();
@@ -464,8 +391,6 @@ void FileBrowserActivity::activateSelected() {
   } else {
     const std::string fullPath = basepath + entry;
     lock.unlock();  // onSelectBook launches an activity; don't hold the lock across it
-    leaving = true;
-    stopCoverLoader();
     onSelectBook(fullPath);
   }
 }
@@ -510,8 +435,6 @@ void FileBrowserActivity::deleteSelected() {
     LOG_ERR("FileBrowser", "OOM: delete confirmation");
     return;
   }
-  leaving = true;
-  stopCoverLoader();
   startActivityForResult(std::move(confirmation), std::move(handler));
 }
 
@@ -533,8 +456,6 @@ void FileBrowserActivity::startRename() {
     LOG_ERR("FileBrowser", "OOM: rename keyboard");
     return;
   }
-  leaving = true;
-  stopCoverLoader();
   startActivityForResult(std::move(keyboard), [this, oldPath, oldEntry, extension](const ActivityResult& result) {
     if (result.isCancelled) return;
     renameSelectedFile(oldPath, oldEntry, std::get<KeyboardResult>(result.data).text, extension);
@@ -601,48 +522,10 @@ bool FileBrowserActivity::handleCustomInput() {
     if (pendingOption >= 0) {
       const int option = pendingOption;
       pendingOption = -1;
-      if (choosingView) {
-        if (SETTINGS.libraryView != option) {
-          {
-            RenderLock lock(*this);
-            SETTINGS.libraryView = static_cast<uint8_t>(option);
-            coverAllocationFailed = false;
-            coverLoader.resetFailure();
-            coverTop = -1;
-            nav.drawnRows = 0;
-            nav.followOnBuild = true;
-          }
-          SETTINGS.saveToFile();
-          if (option == CrossPointSettings::COMPACT_LIST) {
-            stopCoverLoader();
-            RenderLock lock(*this);
-            coverRenderer.reset();
-            for (auto& row : coverRows) row = {};
-            coverCount = 0;
-          }
-          requestUpdate();
-        }
-      } else if (option == 2) {
-        showOptions(true);
-      } else if (option == 1) {
+      if (option == 1) {
         deleteSelected();
-      } else if (option == 3) {
+      } else if (option == 2) {
         startRename();
-      } else if (option == 4 || option == 5) {
-        stopCoverLoader();
-        RenderLock lock(*this);
-        if (nav.selected >= 0 && nav.selected < listCount()) {
-          statusPath = basepath;
-          if (statusPath.back() != '/') statusPath += '/';
-          statusPath += files[nav.selected];
-          if (!ReadingStatus::mark(statusPath,
-                                   option == 4 ? ReadingStatus::State::Finished : ReadingStatus::State::Unread)) {
-            static constexpr StrId dismiss[] = {StrId::STR_OK_BUTTON};
-            optionsPopup->show(StrId::STR_READING_STATUS_SAVE_FAILED, dismiss, 1, 0, [](int) {});
-          }
-          statusRows.clear();
-        }
-        requestUpdate();
       } else {
         activateSelected();
       }
@@ -774,21 +657,6 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
     return;
   }
 
-  if (coverView()) {
-    if (!coverRenderer) {
-      // Reuse the BMP palette, scanline buffers and card props across all visible rows.
-      coverRenderer = makeUniqueNoThrow<LibraryCoverRenderer>();
-      if (!coverRenderer) {
-        LOG_ERR("FileBrowser", "OOM: cover row renderer; using compact list");
-        coverAllocationFailed = true;
-      }
-    }
-    if (coverRenderer) {
-      buildCoverList(screen);
-      return;
-    }
-  }
-
   fui::ListProps props;
   props.rowProvider = &FileBrowserActivity::provideRow;
   props.rowProviderCtx = this;
@@ -802,80 +670,14 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   label.maxLines = 2;
   props.labelText = label;
 
-  // Keep both name lines available beside the compact status/extension value.
+  // Keep both name lines available beside the extension.
   props.balanceWrappedLabelWithValue = false;
   syncListViewport(screen, props);
   // Prewarm the window at the final viewport (syncListViewport just applied
   // follow/clamping to nav.top) before the list resolves rows through the
   // provider.
   prewarmRowGlyphs(nav.top);
-  if (mode == Mode::Books) {
-    const int count = std::min(listCount() - nav.top, std::max(1, nav.visibleRows) + 1);
-    statusRows.resize(count);
-  }
   screen.list(props);
-}
-
-const ReadingStatus::Status& FileBrowserActivity::statusFor(const int index, const int slot) {
-  auto& row = statusRows[slot];
-  statusPath = basepath;
-  if (statusPath.back() != '/') statusPath += '/';
-  statusPath += files[index];
-  if (row.path != statusPath) {
-    row.path = statusPath;
-    row.status = files[index].back() == '/' ? ReadingStatus::Status{} : ReadingStatus::load(statusPath);
-    formatReadingStatus(row.status, row.label, sizeof(row.label));
-  }
-  return row.status;
-}
-
-void FileBrowserActivity::buildCoverList(UiScreen& screen) {
-  const auto status = screen.takeBottom(
-      static_cast<int16_t>(screen.target().lineHeight(screen.theme().smallText.font) + screen.theme().spaceSm));
-  const int rowHeight = GUI.getLibraryRowHeight(screen);
-  const int gap = screen.theme().listRowGap;
-  const auto body = screen.body();
-  const int rows = std::max(1, std::min(MAX_COVER_ROWS, (body.height + gap) / (rowHeight + gap)));
-  const bool resized = nav.visibleRows != rows;
-  nav.drawnRows = rows;
-  nav.drawnCount = listCount();
-  if (resized) nav.followOnBuild = true;
-  auto viewportBody = body;
-  viewportBody.height = static_cast<int16_t>(std::min<int>(body.height, rows * (rowHeight + gap) - gap));
-  auto& viewport = coverRenderer->viewport;
-  nav.syncToProps(viewportBody, rowHeight, gap, listCount(), viewport);
-  const int count = std::min(rows, listCount() - nav.top);
-  if (coverTop != nav.top || coverCount != count) {
-    coverTop = nav.top;
-    coverCount = count;
-    pageChangedAt = millis();
-    detailsRenderedAt = pageChangedAt;
-    for (auto& row : coverRows) {
-      row.details.title.clear();
-      row.details.author.clear();
-      row.details.coverPath.clear();
-      row.loaded = false;
-    }
-  }
-  statusRows.resize(count);
-  for (int slot = 0; slot < count; ++slot) {
-    const int index = nav.top + slot;
-    const auto& details = coverRows[slot].details;
-    formatFileName(files[index], rowNameBuf, sizeof(rowNameBuf));
-    GUI.drawLibraryBookRow(screen, renderer, *coverRenderer, details.title.empty() ? rowNameBuf : details.title.c_str(),
-                           details.author.empty() ? nullptr : details.author.c_str(), details.coverPath.c_str(),
-                           UITheme::getFileIcon(files[index]), index == viewport.selectedIndex, index, ACTION_ROW,
-                           rowHeight, statusFor(index, slot));
-  }
-  nav.onListRendered(static_cast<uint16_t>(nav.top), count,
-                     viewport.selectedIndex >= nav.top && viewport.selectedIndex < nav.top + count);
-  fui::drawListScrollIndicator(screen.target(), body, listCount(), rows, nav.top, screen.theme().listScrollWidth,
-                               screen.theme().listScrollSide, screen.theme().listScrollInset);
-  bool loading = false;
-  for (int slot = 0; slot < count; ++slot) {
-    loading |= !coverRows[slot].loaded && FsHelpers::hasEpubExtension(files[nav.top + slot]);
-  }
-  if (loading && !coverLoader.failed()) screen.target().text(status, tr(STR_LOADING_COVERS), screen.theme().smallText);
 }
 
 void FileBrowserActivity::drawChrome() {
@@ -903,7 +705,7 @@ void FileBrowserActivity::drawFooter() {
   // STR_SELECT instead. Directories in the same picker still descend, so keep STR_OPEN there.
   const bool selectingFirmwareFile = mode == Mode::PickFirmware && !files.empty() && nav.selected >= 0 &&
                                      nav.selected < listCount() && files[nav.selected].back() != '/';
-  const char* confirmLabel = mode == Mode::Books
+  const char* confirmLabel = mode == Mode::Books && !files.empty()
                                  ? tr(STR_OPEN_OPTIONS)
                                  : (files.empty() ? "" : (selectingFirmwareFile ? tr(STR_SELECT) : tr(STR_OPEN)));
   const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, files.empty() ? "" : tr(STR_DIR_UP),

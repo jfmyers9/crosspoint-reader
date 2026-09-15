@@ -105,7 +105,7 @@ void LibraryListActivity::onEnter() {
   // needs the card to itself.
   RenderLock lock(*this);
   UiTabListActivity::onEnter();
-  if (SETTINGS.libraryCoverView) {
+  if (SETTINGS.libraryLayout == CrossPointSettings::COVER_LIST) {
     // The bitmap scratch and bounded page outlive individual renders and are
     // too large for the task stack. Compact mode allocates neither.
     covers = makeUniqueNoThrow<CoverState>();

@@ -239,10 +239,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
                            StrId::STR_THEME_ROUNDEDRAFF},
                           "uiTheme", StrId::STR_CAT_DISPLAY),
-        SettingInfo::Enum(StrId::STR_LIBRARY_VIEW, &CrossPointSettings::libraryView,
-                          {StrId::STR_COMPACT_LIST, StrId::STR_COVER_LIST}, "libraryView", StrId::STR_CAT_DISPLAY),
-        SettingInfo::Toggle(StrId::STR_LIBRARY_COVERS, &CrossPointSettings::libraryCoverView, "libraryCoverView",
-                            StrId::STR_CAT_DISPLAY),
+        SettingInfo::Enum(StrId::STR_LIBRARY_LAYOUT, &CrossPointSettings::libraryLayout,
+                          {StrId::STR_COMPACT_LIST, StrId::STR_COVER_LIST}, "libraryLayout", StrId::STR_CAT_DISPLAY),
         SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
                             StrId::STR_CAT_DISPLAY),
 #if FREEINK_CAP_FRONTLIGHT

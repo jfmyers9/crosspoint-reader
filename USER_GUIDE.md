@@ -119,10 +119,7 @@ The Browse Files screen acts as a file and folder browser. The full path to the 
 
 * **Navigate List:** Use **Left** (or **Side Up**), or **Right** (or **Side Down**) to move the selection cursor up and down through folders and books. You can also long-press these buttons to scroll a full page up or down.
 * **Open Selection:** Press **Confirm** to open a folder or start reading a selected book. Selecting a `.bmp` file will open the image viewer.
-* **Book Options:** Hold **Confirm** for one second and release, or long-press a row on a touch device, to open **Open**, **Delete**, and **File browser view** options. Books also offer **Mark finished** and **Mark unread**. **Delete** asks for confirmation before removing the selected file or folder.
-* **File Browser View:** Choose **Settings → Display → File browser view → Cover list** for small covers, book titles, and authors. **Compact list** is the default. You can also change this from **Book Options** by holding Confirm or long-pressing a book. The choice applies to every folder and survives a restart; switching views keeps the selected book. This setting does not change the separate Library screen.
-
-Cover list prepares visible EPUBs in the background and stores previews on the SD card. Filenames and placeholder icons appear while **Loading covers…** is shown; navigation remains available. Folders and other file formats retain their names and icons. Missing or unsupported covers use a placeholder. Opening a book or leaving the browser may briefly wait for an in-progress cover decode to finish safely. **Clear cache** also removes these previews.
+* **File Options:** Hold **Confirm** for one second and release, or long-press a row on a touch device, to open **Open** and **Delete** options. **Delete** asks for confirmation before removing the selected file or folder. Browse Files always uses a plain list; covers and reading status are available in **Library**.
 * **Rename or Move:** Files can be renamed or moved to a different folder from within the browse screen.
 
 ### 3.4 Library Screen
@@ -134,9 +131,9 @@ The Library indexes up to 4,096 supported books on the SD card and shows their t
 - **Title** groups books by the first letter of the title. Up sorts A-Z and down sorts Z-A. Titles beginning with numbers or punctuation appear under `#`; letters from non-English scripts, including Hebrew, have their own groups.
 - **Author** groups books by author. Up sorts A-Z and down sorts Z-A.
 
-Enable **Settings → Display → Library covers** for a cover-list layout on the Library screen. This is off by default and independent of **File browser view**. Titles and authors still come from the Library index; visible EPUB thumbnails load in the background using the same SD preview cache as Browse Files. Missing or unsupported covers use placeholders. Sorting, search, and grouping keep working; collapsed groups remain compact lists.
+Choose **Settings → Display → Library layout → Cover list** for covers, titles, authors, and reading status in the Library. **Compact list** is the default and shows reading status without artwork. Titles and authors come from the Library index; visible EPUB thumbnails load in the background and are cached on the SD card. Missing or unsupported covers use placeholders. Navigation remains available while covers load; opening a book or leaving Library may briefly wait for an in-progress decode to finish safely. **Clear cache** removes these previews. Sorting, search, and grouping keep working; collapsed groups remain compact lists. An existing **Library covers** preference is preserved when upgrading; the former **File browser view** preference is retired.
 
-Book rows in Library and Browse Files also show saved reading status: **Unread**, a percentage, or **Finished**. Cover rows include a progress bar. Status is blank when no reliable status has been recorded, including older books not yet read with this firmware. EPUB reading and applied KOReader sync positions update the status. Reaching the end marks the book finished; opening it again does not clear that flag.
+Book rows in both Library layouts show saved reading status: **Unread**, a percentage, or **Finished**. Cover rows include a progress bar when progress is known. **No saved progress** means no reliable status has been recorded, including older books not yet read with this firmware; it does not mean unread. EPUB reading and applied KOReader sync positions update the status. Reaching the end marks the book finished; opening it again does not clear that flag.
 
 Hold a book row to open its options and choose **Mark finished** or **Mark unread**. Mark unread clears the finished flag without resetting the saved reading position; continuing to read updates the percentage again. Status is stored separately from rendering caches, so clearing those caches does not erase it.
 
@@ -257,9 +254,7 @@ The Settings screen allows you to configure the device's behavior. There are a f
 
 - **Refresh Frequency**: Set how often the screen does a full refresh while reading to reduce ghosting; options are every 1, 5, 10, 15, or 30 pages.
 
-- **File browser view**: Choose **Compact list** (default) or **Cover list** for Browse Files.
-
-- **Library covers**: Show cover thumbnails in the Library book list (off by default). This does not change Browse Files.
+- **Library layout**: Choose **Compact list** (default) or **Cover list** for Library. Both show reading status; Cover list also shows artwork. Browse Files remains a plain file/folder list.
 
 - **UI Theme**: Set which UI theme to use:
   

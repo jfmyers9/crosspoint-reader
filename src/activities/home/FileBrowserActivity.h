@@ -1,17 +1,11 @@
 #pragma once
 
-#include <ReadingStatus.h>
-
-#include <array>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "activities/UiListActivity.h"
-#include "util/LibraryBookDetails.h"
-#include "util/LibraryCoverLoader.h"
 
-class LibraryCoverRenderer;
 class OptionPopup;
 
 class FileBrowserActivity final : public UiListActivity {
@@ -46,47 +40,15 @@ class FileBrowserActivity final : public UiListActivity {
   char rowNameBuf[ROW_NAME_BUF_SIZE]{};
   char rowExtBuf[16]{};
   static void provideRow(void* ctx, uint16_t index, freeink::ui::ListItem& item);
-  struct StatusRow {
-    std::string path;
-    ReadingStatus::Status status;
-    char label[32] = {};
-  };
-  // Reused visible-page storage, never sized to the directory.
-  std::vector<StatusRow> statusRows;
-  std::string statusPath;
-  const ReadingStatus::Status& statusFor(int index, int slot);
-
   // CJK fallback glyphs are prewarmed for a bounded window of rows around the
   // viewport (one SD pass per list page, like the reader TOC) instead of the
   // whole folder. -1 = nothing prewarmed; reset by loadFiles().
   static constexpr int PREWARM_WINDOW = 24;
   int prewarmedStart = -1;
   void prewarmRowGlyphs(int start);
-  static constexpr int MAX_COVER_ROWS = 8;
-  struct CoverRow {
-    LibraryBookDetails details;
-    bool loaded = false;
-  };
-  std::array<CoverRow, MAX_COVER_ROWS> coverRows;
-  std::unique_ptr<LibraryCoverRenderer> coverRenderer;
   std::unique_ptr<OptionPopup> optionsPopup;
   int pendingOption = -1;
-  bool choosingView = false;
-  bool leaving = false;
-  bool coverAllocationFailed = false;
-  int coverTop = -1;
-  int coverCount = 0;
-  uint32_t folderGeneration = 0;
-  uint32_t pageChangedAt = 0;
-  uint32_t detailsRenderedAt = 0;
-  bool detailsDirty = false;
-  LibraryCoverLoader coverLoader;
-
-  bool coverView() const;
-  void buildCoverList(UiScreen& screen);
-  void serviceCoverLoader();
-  void stopCoverLoader();
-  void showOptions(bool viewOnly = false);
+  void showOptions();
 
   int listCount() const override { return static_cast<int>(files.size()); }
   void buildScreen(UiScreen& screen) override;
@@ -112,7 +74,4 @@ class FileBrowserActivity final : public UiListActivity {
   ~FileBrowserActivity() override;
   void onEnter() override;
   void onExit() override;
-  void loop() override;
-  bool preventAutoSleep() override { return coverLoader.working(); }
-  bool skipLoopDelay() override { return coverLoader.working(); }
 };
