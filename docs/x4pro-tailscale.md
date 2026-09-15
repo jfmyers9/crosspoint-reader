@@ -1,6 +1,6 @@
 # X4 Pro Tailscale BookOrbit build
 
-The `x4pro_tailscale` environment adds an experimental on-demand Tailscale
+The standard `x4pro` environment includes an experimental on-demand Tailscale
 transport for OPDS and KOReader sync servers addressed by a direct
 `100.64.0.0/10` tailnet IP or fully qualified MagicDNS name.
 It uses the independent [MicroLink](https://github.com/CamM2325/microlink)
@@ -10,11 +10,11 @@ client and is not affiliated with or supported by Tailscale.
 
 Create a one-off, non-ephemeral Tailscale auth key, preferably restricted to an
 `x4pro` tag. A durable node is important because the reader spends most of its
-time offline. Build and flash the normal Tailscale environment:
+time offline. Build and flash the standard X4 Pro environment:
 
 ```sh
 git submodule update --init --recursive
-pio run -e x4pro_tailscale -t upload
+pio run -e x4pro -t upload
 ```
 
 Use USB Drive mode to put the key in this file on the SD card:
@@ -71,7 +71,7 @@ traffic while the reader sleeps.
    mode:
 
    ```sh
-   pio run -e x4pro_tailscale -t upload
+   pio run -e x4pro -t upload
    pio device monitor -b 115200
    ```
 
@@ -101,6 +101,8 @@ activity restores the normal sleep behavior.
 
 ## Current constraints
 
+- All X4 Pro targets, including release and RC builds, include this transport.
+  The separate `x4pro_tailscale` target has been removed; use `x4pro` instead.
 - X4 Pro only.
 - Direct tailnet IPv4 peers and fully qualified `.ts.net` MagicDNS names only;
   subnet routes and short MagicDNS names are not enabled.

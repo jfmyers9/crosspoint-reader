@@ -1,6 +1,6 @@
 # BookOrbit reading statistics (fork build)
 
-Build with `pio run -e x4pro_bookorbit`. This extends `x4pro_tailscale` and enables
+Build with `pio run -e x4pro_bookorbit`. This extends `x4pro` and enables
 `CROSSPOINT_ENABLE_BOOKORBIT_STATS`; ordinary firmware environments do not record
 or upload statistics. No statistics screen is added to the reader.
 
