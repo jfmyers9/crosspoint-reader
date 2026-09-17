@@ -1,0 +1,4 @@
+add_executable(FootnoteHistoryTest FootnoteHistoryTest.cpp)
+target_include_directories(FootnoteHistoryTest PRIVATE ${REPO_ROOT}/lib/Epub)
+target_link_libraries(FootnoteHistoryTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(FootnoteHistoryTest)
