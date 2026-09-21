@@ -374,7 +374,7 @@ uint32_t ParsedText::visibleOffsetBaseAt(const size_t wordIndex) const {
 }
 
 uint32_t ParsedText::visibleOffsetAt(const size_t wordIndex) const {
-  if (wordIndex >= wordVisibleOffsetDeltas.size()) return 0;
+  if (wordIndex >= wordVisibleOffsetDeltas.size()) return TextBlock::UNKNOWN_WORD_OFFSET;
   return visibleOffsetBaseAt(wordIndex) + wordVisibleOffsetDeltas[wordIndex];
 }
 
@@ -395,6 +395,7 @@ void ParsedText::pushVisibleOffset(const uint32_t offset) {
 }
 
 void ParsedText::insertVisibleOffset(const size_t wordIndex, const uint32_t offset) {
+  const uint32_t followingBase = visibleOffsetBaseAt(wordIndex);
   const uint32_t base = wordIndex > 0 ? visibleOffsetBaseAt(wordIndex - 1) : visibleOffsetBase;
   for (auto& rebase : visibleOffsetRebases) {
     if (rebase.wordIndex >= wordIndex) rebase.wordIndex++;
@@ -406,6 +407,13 @@ void ParsedText::insertVisibleOffset(const size_t wordIndex, const uint32_t offs
                                        [wordIndex](const auto& rebase) { return rebase.wordIndex > wordIndex; });
     visibleOffsetRebases.insert(rebaseIt, {wordIndex, offset});
     insertionBase = offset;
+    if (wordIndex < wordVisibleOffsetDeltas.size()) {
+      const auto next = std::find_if(visibleOffsetRebases.begin(), visibleOffsetRebases.end(),
+                                     [wordIndex](const auto& rebase) { return rebase.wordIndex >= wordIndex + 1; });
+      if (next == visibleOffsetRebases.end() || next->wordIndex != wordIndex + 1) {
+        visibleOffsetRebases.insert(next, {wordIndex + 1, followingBase});
+      }
+    }
   }
   wordVisibleOffsetDeltas.insert(wordVisibleOffsetDeltas.begin() + wordIndex,
                                  static_cast<uint16_t>(offset - insertionBase));
@@ -450,7 +458,11 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   // misplaced. Compose to NFC here, the single funnel every word passes through, so a
   // precomposed glyph is used instead. This runs once per word at layout time (the
   // result is cached in the section file) and is a cheap no-op for mark-free text.
-  word = utf8ComposeNfc(word);
+  auto composed = utf8ComposeNfc(word);
+  // Normalization changes codepoint counts; without a source map, sub-token
+  // anchors would silently drift away from the original spine text.
+  const bool reliableOffset = composed == word && visibleTextOffset != TextBlock::UNKNOWN_WORD_OFFSET;
+  word = std::move(composed);
 
   EpdFontFamily::Style baseStyle = fontStyle;
   if (underline) {
@@ -458,6 +470,14 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   }
   const bool wordStartsRtl = !hasRtlWord && mayContainRtlBytes(word.c_str()) &&
                              BidiUtils::startsWithRtl(word.c_str(), RTL_PER_WORD_PROBE_DEPTH);
+
+  const auto pushAnchor = [&](const uint32_t offset, const std::string_view token) {
+    const size_t length = countCodepoints(token);
+    pushVisibleOffset(offset);
+    wordSourceLengths.push_back(static_cast<uint16_t>(std::min<size_t>(length, UINT16_MAX)));
+    wordOffsetsReliable.push_back(reliableOffset && length <= UINT16_MAX &&
+                                  length < TextBlock::UNKNOWN_WORD_OFFSET - offset);
+  };
 
   // All token pushes funnel through here: the arena append is the only
   // fallible step, and a failed append drops the token without touching the
@@ -473,7 +493,7 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
     wordNoSpaceBefore.push_back(noSpaceBefore);
     wordFocusBoundary.push_back(focusBoundary);
     wordLinkIds.push_back(linkId);
-    pushVisibleOffset(tokenOffset);
+    pushAnchor(tokenOffset, token);
     if (padRuby && !rubyTexts.empty()) {
       rubyTexts.push_back("");
     }
@@ -517,8 +537,11 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
     wordFocusBoundary.reserve(newCapacity);
     wordLinkIds.reserve(newCapacity);
     wordVisibleOffsetDeltas.reserve(newCapacity);
+    wordOffsetsReliable.reserve(newCapacity);
+    wordSourceLengths.reserve(newCapacity);
   };
 
+  ensureTokenCapacity(1);
   if (auto breakOffsets = cjkCharacterBreakByteOffsets(word); !breakOffsets.empty()) {
     // CJK-heavy paragraphs can push hundreds of tiny tokens quickly when CSS toggles
     // inline styles. Reserve once up front to avoid repeated vector growth reallocations.
@@ -531,7 +554,7 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
       const std::string_view token(word.data() + tokenStart, breakOffset - tokenStart);
       pushToken(token, firstToken ? effectiveAttachToPrevious : false, firstToken ? effectiveNoSpaceBefore : true,
                 /*focusBoundary=*/0, tokenVisibleOffset);
-      tokenVisibleOffset += countCodepoints(token);
+      if (tokenVisibleOffset != TextBlock::UNKNOWN_WORD_OFFSET) tokenVisibleOffset += countCodepoints(token);
       firstToken = false;
       tokenStart = breakOffset;
     }
@@ -576,7 +599,7 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
     const unsigned char* offsetPtr = wordBegin;
     while (offsetPtr < segmentBegin) {
       utf8NextCodepoint(&offsetPtr);
-      segmentOffset++;
+      if (segmentOffset != TextBlock::UNKNOWN_WORD_OFFSET) segmentOffset++;
     }
     if (!isWord) {
       // Punctuation and Numbers stay regular
@@ -807,6 +830,8 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
     wordFocusBoundary.erase(wordFocusBoundary.begin(), wordFocusBoundary.begin() + consumed);
     wordLinkIds.erase(wordLinkIds.begin(), wordLinkIds.begin() + consumed);
     eraseVisibleOffsetPrefix(consumed);
+    wordOffsetsReliable.erase(wordOffsetsReliable.begin(), wordOffsetsReliable.begin() + consumed);
+    wordSourceLengths.erase(wordSourceLengths.begin(), wordSourceLengths.begin() + consumed);
     if (!rubyTexts.empty()) {
       const size_t rtConsumed = std::min(consumed, rubyTexts.size());
       rubyTexts.erase(rubyTexts.begin(), rubyTexts.begin() + rtConsumed);
@@ -1263,11 +1288,15 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
   }
 
   uint32_t remainderOffset = visibleOffsetAt(wordIndex);
+  uint16_t prefixSourceLength = 0;
   const unsigned char* offsetPtr = reinterpret_cast<const unsigned char*>(word.data());
   const unsigned char* splitPtr = offsetPtr + chosenOffset;
   while (offsetPtr < splitPtr) {
     utf8NextCodepoint(&offsetPtr);
-    remainderOffset++;
+    if (prefixSourceLength < wordSourceLengths[wordIndex]) {
+      prefixSourceLength++;
+      if (remainderOffset != TextBlock::UNKNOWN_WORD_OFFSET) remainderOffset++;
+    }
   }
 
   // Split the word at the selected breakpoint. The prefix is materialized as a
@@ -1299,6 +1328,10 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
   words.insert(words.begin() + wordIndex + 1, remainderStored);
   wordStyles.insert(wordStyles.begin() + wordIndex + 1, style);
   insertVisibleOffset(wordIndex + 1, remainderOffset);
+  wordOffsetsReliable.insert(wordOffsetsReliable.begin() + wordIndex + 1, wordOffsetsReliable[wordIndex]);
+  const uint16_t remainderSourceLength = wordSourceLengths[wordIndex] - prefixSourceLength;
+  wordSourceLengths.insert(wordSourceLengths.begin() + wordIndex + 1, remainderSourceLength);
+  wordSourceLengths[wordIndex] = prefixSourceLength;
   // Emphasis follows the text across the split, so a break at or after the boundary leaves the
   // remainder fully regular.
   wordFocusBoundary.insert(wordFocusBoundary.begin() + wordIndex + 1, focusBoundaryAfter(focusBoundary, chosenOffset));
@@ -1358,7 +1391,13 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   const size_t lineBreak = lineBreakIndices[breakIndex];
   const size_t lastBreakAt = breakIndex > 0 ? lineBreakIndices[breakIndex - 1] : 0;
   const size_t lineWordCount = lineBreak - lastBreakAt;
-  const uint32_t lineVisibleOffset = visibleOffsetAt(lastBreakAt);
+  uint32_t lineVisibleOffset = 0;
+  for (size_t i = lastBreakAt; i < lineBreak; ++i) {
+    if (visibleOffsetAt(i) != TextBlock::UNKNOWN_WORD_OFFSET) {
+      lineVisibleOffset = visibleOffsetAt(i);
+      break;
+    }
+  }
 
   const int firstLineIndent = resolveFirstLineIndent(breakIndex == 0, renderer, fontId);
 
@@ -1703,6 +1742,25 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     }
   }
 
+  // Temporary fallible buffer avoids another throwing layout vector. The block
+  // copies these into its existing arena; visual indices map back to source order.
+  auto lineOffsets = makeUniqueNoThrow<uint32_t[]>(lineWordCount * 2);
+  if (!lineOffsets) {
+    LOG_ERR("PTX", "OOM: line word offsets");
+    droppedWords = true;
+    return;
+  }
+  auto* lineEnds = lineOffsets.get() + lineWordCount;
+  bool hasKnownOffset = false;
+  for (size_t i = 0; i < lineWordCount; ++i) {
+    const size_t sourceIndex = lastBreakAt + (willReorder ? visualOrderScratch[i] : i);
+    const bool known = wordOffsetsReliable[sourceIndex] && wordSourceLengths[sourceIndex] > 0;
+    lineOffsets[i] = known ? visibleOffsetAt(sourceIndex) : TextBlock::UNKNOWN_WORD_OFFSET;
+    lineEnds[i] = known ? lineOffsets[i] + wordSourceLengths[sourceIndex] : TextBlock::UNKNOWN_WORD_OFFSET;
+    hasKnownOffset |= lineOffsets[i] != TextBlock::UNKNOWN_WORD_OFFSET;
+  }
+  const uint32_t* offsets = hasKnownOffset ? lineOffsets.get() : nullptr;
+
   // Fast path: no word on this line carries focus emphasis, so pass empty boundary/suffixX
   // vectors. TextBlock pays zero per-word RAM cost for these annotations when they are empty.
   bool lineHasFocusSplit = false;
@@ -1717,7 +1775,7 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     // TextBlock flattens the vectors into its arena; they stay owned here and die at return.
     auto block = makeUniqueNoThrow<TextBlock>(lineWords, lineXPos, lineWordStyles, std::vector<uint8_t>{},
                                               std::vector<uint16_t>{}, blockStyle, std::move(lineRubyTexts),
-                                              std::move(lineLinks));
+                                              std::move(lineLinks), offsets, hasKnownOffset ? lineEnds : nullptr);
     if (!block || !block->valid()) {
       LOG_ERR("PTX", "Dropping line: TextBlock or arena allocation failed");
       // Latch through the same flag as addWord() OOM: the caller releases the
@@ -1745,7 +1803,8 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   }
 
   auto block = makeUniqueNoThrow<TextBlock>(lineWords, lineXPos, lineWordStyles, outBoundaries, outSuffixX, blockStyle,
-                                            std::move(lineRubyTexts), std::move(lineLinks));
+                                            std::move(lineRubyTexts), std::move(lineLinks), offsets,
+                                            hasKnownOffset ? lineEnds : nullptr);
   if (!block || !block->valid()) {
     LOG_ERR("PTX", "Dropping line: TextBlock or arena allocation failed");
     droppedWords = true;  // see the non-focus branch above

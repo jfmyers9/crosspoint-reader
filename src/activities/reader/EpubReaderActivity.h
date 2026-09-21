@@ -171,7 +171,9 @@ class EpubReaderActivity final : public ReaderActivity {
   std::string moreRowValue(int row) const;
   void activateMoreRow(int row);
   void openFootnoteSelect(bool reopenMenuOnCancel);
-  void openDictionaryWordSelect();
+  void openDictionaryWordSelect(int touchX = -1, int touchY = -1);
+  bool saveHighlight(uint32_t start, uint32_t end, const std::string& text);
+  void renderHighlights(const Page& page, int marginLeft, int marginTop) const;
   bool launchKOReaderSync();
   unsigned long confirmLongPressThreshold() const;
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);

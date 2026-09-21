@@ -1432,11 +1432,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
           self->listStack.back().counter += 1;
           char marker[16];
           snprintf(marker, sizeof(marker), "%d.", self->listStack.back().counter);
-          self->currentTextBlock->addWord(marker, EpdFontFamily::REGULAR, false, false, self->visibleTextOffset);
+          self->currentTextBlock->addWord(marker, EpdFontFamily::REGULAR, false, false, TextBlock::UNKNOWN_WORD_OFFSET);
           self->listItemBulletOnly = true;
         } else {
           self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR, false, false,
-                                          self->visibleTextOffset);
+                                          TextBlock::UNKNOWN_WORD_OFFSET);
           self->listItemBulletOnly = true;
         }
       } else if (strcmp(name, "ul") == 0 || strcmp(name, "ol") == 0) {
@@ -1560,7 +1560,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
   const bool countVisibleOffsets = self->insideBody && self->nonVisibleTextDepth == 0 && !self->syntheticCharacterData;
-  const uint32_t callbackVisibleOffset = self->visibleTextOffset;
+  const uint32_t callbackVisibleOffset = countVisibleOffsets ? self->visibleTextOffset : TextBlock::UNKNOWN_WORD_OFFSET;
   if (countVisibleOffsets) {
     const unsigned char* ptr = reinterpret_cast<const unsigned char*>(s);
     const unsigned char* end = ptr + len;
@@ -1723,6 +1723,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       // Check if the next two bytes complete the 3-byte sequence
       if ((i + 2 < len) && (s[i + 1] == FEFF_BYTE_2) && (s[i + 2] == FEFF_BYTE_3)) {
         // Sequence 0xEF 0xBB 0xBF found!
+        if (self->partWordBufferIndex > 0) self->partWordVisibleOffset = TextBlock::UNKNOWN_WORD_OFFSET;
         i += 2;    // Skip the next two bytes
         continue;  // Move to the next iteration
       }
@@ -1744,7 +1745,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
         const unsigned char* const safeEnd = offsetPtr + safeLen;
         while (offsetPtr < safeEnd) {
           utf8NextCodepoint(&offsetPtr);
-          overflowVisibleOffset++;
+          if (overflowVisibleOffset != TextBlock::UNKNOWN_WORD_OFFSET) overflowVisibleOffset++;
         }
         char saved[4];
         for (int j = 0; j < overflow; j++) {

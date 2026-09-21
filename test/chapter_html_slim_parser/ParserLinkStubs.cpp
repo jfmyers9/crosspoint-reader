@@ -12,9 +12,14 @@ const char* lookupHtmlEntity(const char*, size_t) { return nullptr; }
 #include <BidiUtils.h>
 
 bool isExplicitHyphen(uint32_t) { return false; }
-bool isSoftHyphen(uint32_t) { return false; }
+bool isSoftHyphen(uint32_t cp) { return cp == 0xAD; }
 
-std::vector<Hyphenator::BreakInfo> Hyphenator::breakOffsets(const std::string&, bool) { return {}; }
+static size_t testHyphenationBreak = 0;
+void setTestHyphenationBreak(size_t offset) { testHyphenationBreak = offset; }
+std::vector<Hyphenator::BreakInfo> Hyphenator::breakOffsets(const std::string&, bool) {
+  if (testHyphenationBreak) return {{testHyphenationBreak, true}};
+  return {};
+}
 
 ImageBlock::ImageBlock(const std::string& imagePath, const std::string& srcPath, int16_t width, int16_t height)
     : imagePath(imagePath), srcPath(srcPath), width(width), height(height) {}

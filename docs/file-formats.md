@@ -149,6 +149,18 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 51
+
+TextBlock adds a `hasWordOffsets` byte after `hasFocus`. When set, the arena
+starts with `u32 wordVisibleOffsets[wordCount]` followed by
+`u32 wordVisibleEnds[wordCount]`, before the 16-bit arrays. Ends are exclusive
+source offsets: source soft hyphens count, layout-inserted hyphens do not.
+These are zero-based spine-body Unicode-codepoint offsets in visual word order;
+zero is valid and `0xFFFFFFFF` means unknown (both start and end must be
+unknown together). Synthetic/table blocks without anchors omit both arrays.
+Mixed lines may contain unknown entries; text changed by NFC normalization is
+conservatively unanchored. Section caches are rebuilt.
+
 ### Version 50
 
 The header adds `paragraphIndentSpaces` after `extraParagraphSpacing`. The value
@@ -329,9 +341,14 @@ struct BlockStyle {
 struct TextBlock {
     u16 wordCount;
     u8 hasFocus;
+    u8 hasWordOffsets;
     u16 textBytes [[comment("Total size of text[], including one NUL per word")]];
 
     if (wordCount > 0) {
+        if (hasWordOffsets != 0) {
+            u32 wordVisibleOffsets[wordCount];
+            u32 wordVisibleEnds[wordCount];
+        }
         u16 textOff[wordCount] [[comment("Byte offset of word i's text within text[]")]];
         s16 wordXPos[wordCount];
         if (hasFocus != 0) {

@@ -50,6 +50,7 @@
 #include "fontIds.h"
 #include "util/BookmarkUtil.h"
 #include "util/ButtonNavigator.h"
+#include "util/HighlightRange.h"
 #include "util/ScreenshotUtil.h"
 
 namespace {
@@ -100,6 +101,7 @@ ProgressRange getPageProgressRange(const std::shared_ptr<Epub>& epub, const int 
 
 bool bookmarkMatchesProgress(const BookmarkEntry& bookmark, const int spineIndex, const int page, const int pageCount,
                              const ProgressRange& pageRange) {
+  if (bookmark.isHighlight()) return false;
   if (bookmark.computedSpineIndex == spineIndex && bookmark.computedChapterPageCount == pageCount &&
       bookmark.computedChapterProgress == page) {
     return true;
@@ -348,13 +350,15 @@ void EpubReaderActivity::showBuildPopup(GfxRenderer& renderer, int& pagesUntilFu
   buildPopupPending = false;
 }
 
-void EpubReaderActivity::openDictionaryWordSelect() {
-  if (SETTINGS.dictionaryName[0] == '\0') {
+void EpubReaderActivity::openDictionaryWordSelect(const int touchX, const int touchY) {
+  const bool selectionMode = touchX >= 0 && touchY >= 0;
+  if (!selectionMode && SETTINGS.dictionaryName[0] == '\0') {
     showDictionaryMessage = true;
     dictionaryMessageTime = millis();
     requestUpdate();
     return;
   }
+  RenderLock lock;
   if (!section) return;
   auto page = section->loadPage(section->currentPage);
   if (!page) return;
@@ -365,9 +369,19 @@ void EpubReaderActivity::openDictionaryWordSelect() {
   orientedMarginTop += SETTINGS.screenMargin;
   orientedMarginLeft += SETTINGS.screenMargin;
 
-  startActivityForResult(std::make_unique<DictionaryWordSelectActivity>(renderer, mappedInput, std::move(page),
-                                                                        orientedMarginLeft, orientedMarginTop),
-                         [this](const ActivityResult&) { requestUpdate(); });
+  auto picker = makeUniqueNoThrow<DictionaryWordSelectActivity>(renderer, mappedInput, std::move(page),
+                                                                orientedMarginLeft, orientedMarginTop);
+  if (!picker) {
+    LOG_ERR("ERS", "OOM: word selection activity");
+    return;
+  }
+  if (selectionMode) {
+    picker->setSelectionContext(
+        {touchX, touchY, this, [](void* owner, uint32_t start, uint32_t end, const std::string& text) {
+           return static_cast<EpubReaderActivity*>(owner)->saveHighlight(start, end, text);
+         }});
+  }
+  startActivityForResult(std::move(picker), [this](const ActivityResult&) { requestUpdate(); });
 }
 
 void EpubReaderActivity::openFootnoteSelect(const bool reopenMenuOnCancel) {
@@ -535,6 +549,16 @@ void EpubReaderActivity::loop() {
     overlay = Overlay::None;
     discardOverlayPage();
     requestUpdate();
+    return;
+  }
+
+  int selectionX = 0;
+  int selectionY = 0;
+  if (!atEndOfBook && !endOfBookMenuActive() && SETTINGS.touchReaderControls &&
+      mappedInput.wasScreenLongPress(selectionX, selectionY)) {
+    automaticPageTurnActive = false;
+    pendingManualTurn = 0;
+    openDictionaryWordSelect(selectionX, selectionY);
     return;
   }
 
@@ -1754,17 +1778,20 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     } else {
       page->renderImages(renderer, fontId, orientedMarginLeft, orientedMarginTop);
     }
+    renderHighlights(*page, orientedMarginLeft, orientedMarginTop);
     if (absoluteImageGrayscale) renderStatusBar();
   };
 
   if (pageHasImagesNeedingDecode) {
     page->renderWithImagePlaceholders(renderer, fontId, orientedMarginLeft, orientedMarginTop);
+    renderHighlights(*page, orientedMarginLeft, orientedMarginTop);
     renderStatusBar();
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     renderer.clearScreen();
   }
 
   page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop);
+  renderHighlights(*page, orientedMarginLeft, orientedMarginTop);
   renderStatusBar();
   const auto tBwRender = millis();
 
@@ -2836,6 +2863,90 @@ void EpubReaderActivity::loadCachedBookmarks() {
 
   BookmarkFile::load(epub->getPath(), cachedBookmarks);
   updateBookmarkFlag();
+}
+
+bool EpubReaderActivity::saveHighlight(const uint32_t start, const uint32_t end, const std::string& text) {
+  if (!epub || !section || start >= end || text.empty() || text.size() > BookmarkEntry::MAX_HIGHLIGHT_QUOTE_LENGTH) {
+    LOG_ERR("ERS", "Invalid highlight selection");
+    return false;
+  }
+  // A prior transient load failure must not turn a new highlight into an overwrite
+  // of the book's existing annotations. Refresh only at this explicit save boundary.
+  if (!BookmarkFile::load(epub->getPath(), cachedBookmarks)) {
+    const std::string path = BookmarkUtil::getBookmarkPath(epub->getPath());
+    if (Storage.exists(path.c_str()) || Storage.exists((path + ".bak").c_str())) {
+      LOG_ERR("ERS", "Cannot add highlight: existing annotations could not be loaded");
+      return false;
+    }
+  }
+  for (const auto& entry : cachedBookmarks) {
+    if (entry.isHighlight() && entry.computedSpineIndex == currentSpineIndex && entry.visibleTextOffset == start &&
+        entry.highlightEndOffset == end)
+      return true;
+  }
+  if (cachedBookmarks.size() >= BookmarkFile::MAX_ENTRIES_FOR_NEW_HIGHLIGHT) {
+    LOG_ERR("ERS", "Highlight storage limit reached");
+    return false;
+  }
+  BookmarkEntry entry;
+  entry.hasVisibleTextOffset = true;
+  entry.visibleTextOffset = start;
+  entry.highlightEndOffset = end;
+  entry.computedSpineIndex = currentSpineIndex;
+  // The stable offset, not a layout-dependent page hint, locates highlights.
+  entry.computedChapterPageCount = 0;
+  entry.percentage = epub->calculateProgress(
+      currentSpineIndex,
+      section->pageCount > 0 ? static_cast<float>(section->currentPage) / section->estimatedTotalPages() : 0.0f);
+  entry.summary = text;
+  cachedBookmarks.reserve(cachedBookmarks.size() + 1);
+  cachedBookmarks.push_back(std::move(entry));
+  if (!BookmarkFile::save(epub->getPath(), cachedBookmarks)) {
+    cachedBookmarks.pop_back();
+    LOG_ERR("ERS", "Failed to save highlight");
+    return false;
+  }
+  return true;
+}
+
+void EpubReaderActivity::renderHighlights(const Page& page, const int marginLeft, const int marginTop) const {
+  if (std::none_of(cachedBookmarks.begin(), cachedBookmarks.end(), [&](const BookmarkEntry& entry) {
+        return entry.isHighlight() && entry.computedSpineIndex == currentSpineIndex;
+      }))
+    return;
+  const int fontId = SETTINGS.getReaderFontId();
+  const int ascender = renderer.getFontAscenderSize(fontId);
+  for (const auto& element : page.elements) {
+    if (element->getTag() != TAG_PageLine) continue;
+    const auto* line = static_cast<const PageLine*>(element.get());
+    const auto* block = line->getBlock();
+    if (!block || !block->valid() || !block->hasWordOffsets()) continue;
+    for (uint16_t i = 0; i < block->wordCount(); ++i) {
+      const auto start = block->wordVisibleOffset(i);
+      const auto end = block->wordVisibleEndOffset(i);
+      const bool highlighted =
+          std::any_of(cachedBookmarks.begin(), cachedBookmarks.end(), [&](const BookmarkEntry& entry) {
+            return entry.isHighlight() && entry.computedSpineIndex == currentSpineIndex &&
+                   HighlightRange::overlaps(start, end, entry.visibleTextOffset, entry.highlightEndOffset);
+          });
+      if (!highlighted) continue;
+      const int x = marginLeft + line->xPos + block->wordXpos(i);
+      int y = marginTop + line->yPos + block->getRubyShift(ascender) + ascender + 2;
+      const auto style = block->wordStyle(i);
+      const auto boundary = block->focusBoundary(i);
+      int width = boundary > 0
+                      ? block->focusSuffixX(i) + renderer.getTextAdvanceX(fontId, block->wordText(i) + boundary, style)
+                      : renderer.getTextAdvanceX(fontId, block->wordText(i), style);
+      if ((style & EpdFontFamily::SUP) != 0) {
+        y -= ascender * 2 / 5;
+      } else if ((style & EpdFontFamily::SUB) != 0) {
+        y += ascender / 4;
+      }
+      if ((style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) width = (width + 1) / 2;
+      // Underlining keeps glyph antialiasing intact in every grayscale pass.
+      renderer.drawLine(x, y, x + width, y, true);
+    }
+  }
 }
 
 void EpubReaderActivity::addBookmark() {

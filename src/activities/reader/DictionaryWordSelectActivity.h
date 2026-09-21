@@ -7,7 +7,9 @@
 #include <vector>
 
 #include "activities/Activity.h"
+#include "components/OptionPopup.h"
 #include "util/Dictionary.h"
+#include "util/WordSelectionState.h"
 
 // Word selection over the current reader page: Left/Right step through words
 // in reading order, Up/Down jump rows, Confirm looks the word up and opens
@@ -15,6 +17,13 @@
 // touch-down moves the highlight and a tap on a word looks it up directly.
 class DictionaryWordSelectActivity final : public Activity {
  public:
+  struct SelectionContext {
+    int x = -1;
+    int y = -1;
+    void* owner = nullptr;
+    bool (*save)(void*, uint32_t, uint32_t, const std::string&) = nullptr;
+  };
+
   explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         std::unique_ptr<Page> page, int marginLeft, int marginTop)
       : Activity("DictionaryWordSelect", renderer, mappedInput),
@@ -25,6 +34,7 @@ class DictionaryWordSelectActivity final : public Activity {
   void onEnter() override;
   void loop() override;
   void render(RenderLock&&) override;
+  void setSelectionContext(const SelectionContext& context) { selectionContext = context; }
 
  private:
   // Screen box of one selectable word. `text` points into the owned Page's
@@ -33,18 +43,27 @@ class DictionaryWordSelectActivity final : public Activity {
     int16_t x;
     int16_t y;
     int16_t width;
+    int16_t height;
     uint16_t row;
     const char* text;
     EpdFontFamily::Style style;
+    uint32_t start = 0;
+    uint32_t end = 0;
   };
 
-  enum class Popup : uint8_t { None, Busy, NotFound, Error };
+  enum class Popup : uint8_t { None, Busy, NotFound, Error, Hint };
 
   void extractWords();
   int closestInRow(uint16_t row, int centerX) const;
   int wordAt(int x, int y) const;
   void moveVertical(int direction);
+  void selectWord(int index) {
+    selected = index;
+    selectionState.select(index);
+  }
   void performLookup();
+  void showSelectionActions();
+  void saveSelection();
   bool drawHighlightWithSnapshot();
   void drawHints() const;
 
@@ -56,6 +75,10 @@ class DictionaryWordSelectActivity final : public Activity {
 
   std::vector<WordBox> words;
   int selected = 0;
+  SelectionContext selectionContext;
+  OptionPopup selectionActions;
+  bool selectionActionChosen = false;
+  WordSelectionState selectionState;
   uint16_t rowCount = 0;
   unsigned long lastHorizontalMoveTime = 0;
 

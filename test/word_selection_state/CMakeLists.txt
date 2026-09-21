@@ -1,0 +1,3 @@
+add_executable(WordSelectionStateTest WordSelectionStateTest.cpp)
+target_link_libraries(WordSelectionStateTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(WordSelectionStateTest)
