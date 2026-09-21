@@ -3,6 +3,7 @@
 #include <HalClock.h>
 #include <HalStorage.h>
 #include <KOReaderCredentialStore.h>
+#include <LocalReadingStats.h>
 #include <ReadingStatsOutbox.h>
 #include <gtest/gtest.h>
 
@@ -38,6 +39,7 @@ class BookOrbitStatsTest : public testing::Test {
  protected:
   void SetUp() override {
     BookOrbitStats::pause();
+    LocalReadingStats::reset();
     Storage.files.clear();
     Storage.directories.clear();
     Storage.failRename = false;
@@ -75,6 +77,23 @@ bool BookOrbitStatsClient::lastUploadWasUnmatched() { return lastUnmatched; }
 bool BookOrbitStatsClient::completeSweep(uint32_t uploaded, uint32_t booksMatched) {
   sweeps.emplace_back(uploaded, booksMatched);
   return acceptSweep;
+}
+
+TEST_F(BookOrbitStatsTest, LocalHistoryReceivesLifecycleWithoutServerCredentials) {
+  credentialStub.credentials = false;
+  BookOrbitStats::beginBook("offline-book");
+  BookOrbitStats::showPage(0.1f);
+  BookOrbitStats::suspend();
+  BookOrbitStats::checkpoint();
+  BookOrbitStats::pause();
+  BookOrbitStats::sync();
+  EXPECT_EQ(LocalReadingStats::begins, 1u);
+  EXPECT_EQ(LocalReadingStats::lastBook, "offline-book");
+  EXPECT_EQ(LocalReadingStats::pages, 1u);
+  EXPECT_EQ(LocalReadingStats::suspends, 1u);
+  EXPECT_EQ(LocalReadingStats::checkpoints, 1u);
+  EXPECT_EQ(LocalReadingStats::pauses, 2u);
+  EXPECT_TRUE(uploads.empty());
 }
 
 TEST_F(BookOrbitStatsTest, PausePersistsAndNextBookGetsIndependentIdentityAndDuration) {
