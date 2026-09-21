@@ -137,6 +137,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void showBuildPopup(GfxRenderer& renderer, int& pagesUntilFullRefresh);
   bool applyDeferredReposition();
   void clearDeferredReposition();
+  void clearPendingNavigation();
   void rememberCurrentContentOffset();
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
   void jumpToPercent(int percent);

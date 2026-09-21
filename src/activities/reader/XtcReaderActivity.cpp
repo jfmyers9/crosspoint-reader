@@ -73,7 +73,13 @@ XtcReaderActivity::StatusBarInfo XtcReaderActivity::getStatusBarInfo() const {
   const auto sb = SETTINGS.statusBarSpec();
   const int bookPageCount = static_cast<int>(xtc->getPageCount());
   const int bookPage = static_cast<int>(currentPage) + 1;
-  std::string title = sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE ? xtc->getTitle() : "";
+  bool showBookTitle = sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE;
+#ifdef CROSSPOINT_ENABLE_BOOKORBIT_STATS
+  // Time estimates are EPUB-only; retain a useful title for XTC books.
+  showBookTitle = showBookTitle || sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::CHAPTER_TIME_LEFT ||
+                  sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::BOOK_TIME_LEFT;
+#endif
+  std::string title = showBookTitle ? xtc->getTitle() : "";
 
   if (!xtc->hasChapters()) {
     return StatusBarInfo{bookPage, bookPageCount, std::move(title)};
