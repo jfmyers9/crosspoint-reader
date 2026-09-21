@@ -11,9 +11,11 @@
 
 #include "../../../../src/fontIds.h"
 
-size_t TextBlock::arenaSize(const uint16_t wordCount, const bool hasFocus, const uint16_t textBytes) {
-  // Layout documented in TextBlock.h: 16-bit arrays first, then 8-bit arrays, then text.
+size_t TextBlock::arenaSize(const uint16_t wordCount, const bool hasFocus, const bool hasOffsets,
+                            const uint16_t textBytes) {
+  // Layout documented in TextBlock.h: widest arrays first, then text.
   size_t size = static_cast<size_t>(wordCount) * (sizeof(uint16_t) + sizeof(int16_t) + sizeof(uint8_t));
+  if (hasOffsets) size += static_cast<size_t>(wordCount) * sizeof(uint32_t) * 2;
   if (hasFocus) {
     size += static_cast<size_t>(wordCount) * (sizeof(uint16_t) + sizeof(uint8_t));
   }
@@ -23,6 +25,12 @@ size_t TextBlock::arenaSize(const uint16_t wordCount, const bool hasFocus, const
 void TextBlock::bindArenaPointers() {
   uint8_t* base = arena.get();
   const size_t wc = numWords;
+  if (offsetsPresent) {
+    visibleOffsetsArr = reinterpret_cast<const uint32_t*>(base);
+    base += wc * sizeof(uint32_t);
+    visibleEndsArr = reinterpret_cast<const uint32_t*>(base);
+    base += wc * sizeof(uint32_t);
+  }
   textOffArr = reinterpret_cast<const uint16_t*>(base);
   xposArr = reinterpret_cast<const int16_t*>(base + wc * 2);
   size_t off = wc * 4;
@@ -42,7 +50,8 @@ void TextBlock::bindArenaPointers() {
 TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
                      const std::vector<EpdFontFamily::Style>& wordStyles, const std::vector<uint8_t>& focusBoundary,
                      const std::vector<uint16_t>& focusSuffixX, const BlockStyle& blockStyle,
-                     std::vector<std::string> rubyTexts, std::vector<LinkSpan> linkSpans)
+                     std::vector<std::string> rubyTexts, std::vector<LinkSpan> linkSpans,
+                     const uint32_t* visibleOffsets, const uint32_t* visibleEnds)
     : blockStyle(blockStyle), rubyTexts(std::move(rubyTexts)), linkSpans(std::move(linkSpans)) {
   // Same invariant as deserialize(): a block never holds an all-empty rubyTexts, so a
   // ruby-less line costs nothing beyond its arena. The layout engine hands one over for
@@ -67,6 +76,7 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
 
   numWords = static_cast<uint16_t>(words.size());
   focusPresent = hasFocus;
+  offsetsPresent = visibleOffsets != nullptr && visibleEnds != nullptr;
   if (numWords == 0) {
     return;  // valid empty block, no arena
   }
@@ -84,7 +94,7 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
   }
   textBytes = static_cast<uint16_t>(totalText);
 
-  const size_t size = arenaSize(numWords, focusPresent, textBytes);
+  const size_t size = arenaSize(numWords, focusPresent, offsetsPresent, textBytes);
   arena = makeUniqueNoThrow<uint8_t[]>(size);
   if (!arena) {
     // Evict rebuildable caches (SD-font mini data, render glyph cache) and
@@ -101,6 +111,17 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
     return;
   }
   bindArenaPointers();
+
+  if (offsetsPresent) {
+    auto* starts = const_cast<uint32_t*>(visibleOffsetsArr);
+    auto* ends = const_cast<uint32_t*>(visibleEndsArr);
+    for (uint16_t i = 0; i < numWords; ++i) {
+      const bool known = visibleOffsets[i] != UNKNOWN_WORD_OFFSET && visibleEnds[i] != UNKNOWN_WORD_OFFSET &&
+                         visibleEnds[i] > visibleOffsets[i];
+      starts[i] = known ? visibleOffsets[i] : UNKNOWN_WORD_OFFSET;
+      ends[i] = known ? visibleEnds[i] : UNKNOWN_WORD_OFFSET;
+    }
+  }
 
   // Pass 2: fill. Mutable aliases of the const views bound above.
   auto* textOff = const_cast<uint16_t*>(textOffArr);
@@ -313,9 +334,10 @@ bool TextBlock::serialize(HalFile& file) const {
   // per-word arrays and the text blob.
   serialization::writePod(file, numWords);
   serialization::writePod(file, static_cast<uint8_t>(focusPresent ? 1 : 0));
+  serialization::writePod(file, static_cast<uint8_t>(offsetsPresent ? 1 : 0));
   serialization::writePod(file, textBytes);
   if (numWords > 0) {
-    const size_t size = arenaSize(numWords, focusPresent, textBytes);
+    const size_t size = arenaSize(numWords, focusPresent, offsetsPresent, textBytes);
     if (file.write(arena.get(), size) != size) {
       LOG_ERR("TXB", "Serialization failed: arena write (%u bytes)", static_cast<uint32_t>(size));
       return false;
@@ -348,12 +370,22 @@ bool TextBlock::serialize(HalFile& file) const {
 }
 
 std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
-  uint16_t wc;
-  uint8_t hasFocus;
-  uint16_t textBytes;
+  uint16_t wc = 0;
+  uint8_t hasFocus = 0;
+  uint8_t hasOffsets = 0;
+  uint16_t textBytes = 0;
+  if (file.available() < 6) {
+    LOG_ERR("TXB", "Deserialization failed: truncated header");
+    return nullptr;
+  }
   serialization::readPod(file, wc);
   serialization::readPod(file, hasFocus);
+  serialization::readPod(file, hasOffsets);
   serialization::readPod(file, textBytes);
+  if (hasFocus > 1 || hasOffsets > 1) {
+    LOG_ERR("TXB", "Deserialization failed: invalid flags");
+    return nullptr;
+  }
 
   // Sanity checks: cap the arena allocation and reject impossible geometry
   // (every word carries at least its NUL terminator).
@@ -374,9 +406,10 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   block->numWords = wc;
   block->textBytes = textBytes;
   block->focusPresent = hasFocus != 0;
+  block->offsetsPresent = hasOffsets != 0;
 
   if (wc > 0) {
-    const size_t size = arenaSize(wc, block->focusPresent, textBytes);
+    const size_t size = arenaSize(wc, block->focusPresent, block->offsetsPresent, textBytes);
     block->arena = makeUniqueNoThrow<uint8_t[]>(size);
     if (!block->arena) {
       LOG_ERR("TXB", "OOM: arena %u bytes", static_cast<uint32_t>(size));
@@ -387,6 +420,18 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
       return nullptr;
     }
     block->bindArenaPointers();
+
+    if (block->offsetsPresent) {
+      for (uint16_t i = 0; i < wc; ++i) {
+        const uint32_t start = block->visibleOffsetsArr[i];
+        const uint32_t end = block->visibleEndsArr[i];
+        if ((start == UNKNOWN_WORD_OFFSET) != (end == UNKNOWN_WORD_OFFSET) ||
+            (start != UNKNOWN_WORD_OFFSET && end <= start)) {
+          LOG_ERR("TXB", "Deserialization failed: corrupt word range %u", i);
+          return nullptr;
+        }
+      }
+    }
 
     // Validate offsets before anything dereferences wordText(): offset 0 first,
     // strictly increasing, in bounds, and every word NUL-terminated (word i ends

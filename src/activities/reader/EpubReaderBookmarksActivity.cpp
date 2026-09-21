@@ -61,6 +61,7 @@ void EpubReaderBookmarksActivity::rebuildBookmarkRowItems() {
                   std::to_string(bookmark.computedChapterPageCount) + " - ";
     }
     subtitle += tocTitle;
+    if (bookmark.isHighlight()) subtitle = std::string(tr(STR_HIGHLIGHT)) + " - " + subtitle;
     bookmarkSubtitles.push_back(std::move(subtitle));
 
     fui::ListItem item;
@@ -167,6 +168,7 @@ void EpubReaderBookmarksActivity::startRename() {
     if (result.isCancelled || renameIndex < 0 || renameIndex >= listCount()) {
       return;
     }
+    RenderLock lock;
     std::string previousName = std::move(bookmarks[renameIndex].name);
     bookmarks[renameIndex].name = std::get<KeyboardResult>(result.data).text;
     rebuildBookmarkRowItems();
@@ -184,7 +186,7 @@ void EpubReaderBookmarksActivity::showBookmarkActions() {
     return;
   }
   const StrId options[] = {StrId::STR_OPEN, StrId::STR_RENAME, StrId::STR_DELETE};
-  confirmPopup.show(StrId::STR_BOOKMARKS, options, 3, 0, [this](const int idx) {
+  confirmPopup.show(StrId::STR_BOOKMARKS_AND_HIGHLIGHTS, options, 3, 0, [this](const int idx) {
     if (idx == 0) {
       openSelectedBookmark();
     } else if (idx == 1) {
@@ -213,6 +215,8 @@ void EpubReaderBookmarksActivity::showDeleteConfirmation() {
 }
 
 void EpubReaderBookmarksActivity::deleteSelectedBookmark() {
+  RenderLock lock;
+  auto removed = std::move(bookmarks[nav.selected]);
   bookmarks.erase(bookmarks.begin() + nav.selected);
   // Deleting shifts every later bookmark's index, so the cached subtitles and
   // actionValues must be re-derived, not just trimmed — and before the SD
@@ -220,6 +224,10 @@ void EpubReaderBookmarksActivity::deleteSelectedBookmark() {
   rebuildBookmarkRowItems();
   if (!BookmarkFile::save(epubPath, bookmarks)) {
     LOG_ERR("EPB", "Failed to save bookmarks after delete");
+    bookmarks.insert(bookmarks.begin() + nav.selected, std::move(removed));
+    rebuildBookmarkRowItems();
+    requestUpdate();
+    return;
   }
 
   // Move selector up if we deleted the last item
@@ -292,8 +300,9 @@ void EpubReaderBookmarksActivity::render(RenderLock&&) {
 
   // Manual centering to honor content gutters.
   const int titleX =
-      contentX + (contentWidth - renderer.getTextWidth(UI_12_FONT_ID, tr(STR_BOOKMARKS), EpdFontFamily::BOLD)) / 2;
-  renderer.drawText(UI_12_FONT_ID, titleX, 15 + contentY, tr(STR_BOOKMARKS), true, EpdFontFamily::BOLD);
+      contentX +
+      (contentWidth - renderer.getTextWidth(UI_12_FONT_ID, tr(STR_BOOKMARKS_AND_HIGHLIGHTS), EpdFontFamily::BOLD)) / 2;
+  renderer.drawText(UI_12_FONT_ID, titleX, 15 + contentY, tr(STR_BOOKMARKS_AND_HIGHLIGHTS), true, EpdFontFamily::BOLD);
 
   renderUi();
 

@@ -49,12 +49,18 @@ class ParsedText {
   // Zero-based visible Unicode-codepoint offsets in the spine body, stored as
   // uint16_t deltas from a shared base to keep this layout-only metadata small.
   // Pathological spans wider than uint16_t use sparse rebases; rendered
-  // TextBlocks do not carry any of this metadata.
+  // TextBlocks receive absolute offsets in their compact arenas.
   struct VisibleOffsetRebase {
     size_t wordIndex;
     uint32_t base;
   };
   std::vector<uint16_t> wordVisibleOffsetDeltas;
+  // One bit/token keeps approximate page offsets usable after normalization,
+  // without exposing those offsets as precise word anchors.
+  std::vector<bool> wordOffsetsReliable;
+  // Source lengths survive soft-hyphen removal and inserted display hyphens.
+  // uint16_t bounds per-token memory; oversized tokens are unanchored.
+  std::vector<uint16_t> wordSourceLengths;
   uint32_t visibleOffsetBase = 0;
   std::vector<VisibleOffsetRebase> visibleOffsetRebases;
   std::deque<std::string> rubyTexts;
@@ -112,7 +118,7 @@ class ParsedText {
   ~ParsedText() = default;
 
   void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false,
-               uint32_t visibleTextOffset = 0, uint8_t linkId = 0);
+               uint32_t visibleTextOffset = TextBlock::UNKNOWN_WORD_OFFSET, uint8_t linkId = 0);
   uint8_t addLinkTarget(const char* href);
   bool linkTargetMatches(uint8_t linkId, const char* href) const;
   void setRubyForWordAt(size_t index, const std::string& ruby);

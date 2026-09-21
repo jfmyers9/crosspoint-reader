@@ -45,7 +45,7 @@ void EpubReaderMenuActivity::buildMenuItems(std::vector<MenuItem>& items, bool h
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
   }
   if (hasBookmarks) {
-    items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
+    items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS_AND_HIGHLIGHTS});
   }
   items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
   items.push_back({MenuAction::NIGHT_MODE, StrId::STR_NIGHT_MODE});

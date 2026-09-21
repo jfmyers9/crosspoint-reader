@@ -638,6 +638,18 @@ Words on the current page can be looked up in an offline StarDict dictionary sto
 
 See [docs/dictionary.md](docs/dictionary.md) for supported formats, setup, and where to find dictionaries.
 
+### Touch selection and highlights (EPUB)
+
+With touch reader controls enabled, long-press a word on the reading page to open **Selected text**:
+
+- **Look Up** opens the selected word in your configured offline dictionary. Select a dictionary in **Settings → Reader → Dictionary** first.
+- **Highlight** saves the selection. Saved highlights are underlined on the reading page.
+- **Extend selection** lets you tap the other end of a passage on the same page, then choose **Highlight**. You can select backwards as well as forwards.
+
+Open **Bookmarks & highlights** in the reader menu to revisit a highlight. Long-press its row to rename or delete it. Highlights work without an installed dictionary and remain anchored when font size, margins, or orientation change. They are stored with bookmarks under `/.crosspoint/bookmarks/`, outside the disposable section cache.
+
+Selection currently stays within one page. Some synthetic or table text, and words changed by Unicode normalization, have no reliable source position and cannot be highlighted. Quotes are limited to 2,048 UTF-8 bytes; new highlights cannot be added once a book has 512 combined bookmarks/highlights. Notes, cross-page selection, and highlight synchronization are not supported.
+
 ### System Navigation
 
 * **Return to Home:** Press the **Back** button to close the book and return to the **[Home](#31-home-screen)** screen.
