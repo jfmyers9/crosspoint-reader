@@ -5,6 +5,7 @@
 #include <HalStorage.h>
 #include <KOReaderCredentialStore.h>
 #include <KOReaderDocumentId.h>
+#include <LocalReadingStats.h>
 #include <Logging.h>
 #include <MD5Builder.h>
 #include <ReadingStatsOutbox.h>
@@ -241,6 +242,7 @@ bool markSweep() {
 }  // namespace
 
 void BookOrbitStats::beginBook(const std::string& path) {
+  LocalReadingStats::beginBook(path);
   stats.recording = false;
   if (!finishRecording() || !configureScope()) return;
   if (!stats.bootId[0]) {
@@ -263,6 +265,7 @@ void BookOrbitStats::beginBook(const std::string& path) {
 }
 
 void BookOrbitStats::showPage(float progress) {
+  LocalReadingStats::showPage(progress);
   if (!stats.recording || !std::isfinite(progress)) return;
   const auto units = static_cast<uint32_t>(std::clamp(progress, 0.0f, 1.0f) * PROGRESS_UNITS + 0.5f);
   if (!stats.recorder.showPage(units, PROGRESS_UNITS, nowMs())) {
@@ -271,15 +274,18 @@ void BookOrbitStats::showPage(float progress) {
 }
 
 void BookOrbitStats::suspend() {
+  LocalReadingStats::suspend();
   if (stats.recording && !stats.recorder.suspend(nowMs())) LOG_ERR("BOSTATS", "Cannot suspend recorder");
 }
 
 void BookOrbitStats::pause() {
+  LocalReadingStats::pause();
   if (!stats.recording) return;
   if (!finishRecording()) LOG_ERR("BOSTATS", "Cannot finalize reading interval");
 }
 
 void BookOrbitStats::checkpoint() {
+  LocalReadingStats::checkpoint();
   if (!stats.recording) return;
   anchorClock();
   if (!stats.recorder.checkpoint(nowMs())) LOG_ERR("BOSTATS", "Cannot checkpoint reading interval");
@@ -287,6 +293,7 @@ void BookOrbitStats::checkpoint() {
 }
 
 void BookOrbitStats::sync() {
+  LocalReadingStats::pause();
   const uint64_t startedMs = nowMs();
   stats.recording = false;
   const bool finalized = finishRecording();

@@ -1,6 +1,11 @@
 #include "EpubReaderActivity.h"
 
 #include <BookOrbitStats.h>
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+#include <LocalReadingStats.h>
+
+#include "ReadingStatsActivity.h"
+#endif
 #include <Epub/Page.h>
 #include <Epub/blocks/TextBlock.h>
 #include <FontCacheManager.h>
@@ -822,7 +827,7 @@ void EpubReaderActivity::jumpToPercent(int percent) {
 
   {
     RenderLock lock;
-    clearDeferredReposition();
+    clearPendingNavigation();
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = 0;
     pendingPercentJump = true;
@@ -841,7 +846,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
 
       if (sync.hasVisibleTextOffset && sync.spineIndex >= 0 && sync.spineIndex < epub->getSpineItemsCount()) {
         RenderLock lock;
-        clearDeferredReposition();
+        clearPendingNavigation();
         if (section && currentSpineIndex == sync.spineIndex) {
           const auto page = section->getPageForVisibleTextOffset(sync.visibleTextOffset);
           section->currentPage = page.value_or(std::max(0, sync.page));
@@ -871,7 +876,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       }
 
       RenderLock lock;
-      clearDeferredReposition();
+      clearPendingNavigation();
 
       if (currentSpineIndex != targetSpineIndex) {
         currentSpineIndex = targetSpineIndex;
@@ -915,7 +920,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
             }
             const auto& chapterResult = std::get<ChapterResult>(result.data);
             RenderLock lock;
-            clearDeferredReposition();
+            clearPendingNavigation();
             currentSpineIndex = chapterResult.spineIndex;
             pendingAnchor = chapterResult.anchor;
             nextPageNumber = 0;
@@ -934,6 +939,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                              [this](const ActivityResult&) {
                                {
                                  RenderLock lock;
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+                                 LocalReadingStats::breakSequence();
+#endif
                                  if (section) {
                                    rememberCurrentContentOffset();
                                    cachedSpineIndex = currentSpineIndex;
@@ -968,6 +976,22 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     }
     case EpubReaderMenuActivity::MenuAction::DICTIONARY: {
       openDictionaryWordSelect();
+      break;
+    }
+    case EpubReaderMenuActivity::MenuAction::READING_STATISTICS: {
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+      RenderLock lock;
+      const auto position = chapterPosition();
+      const float progress = epub->calculateProgress(currentSpineIndex, position.chapterFraction());
+      const float chapterEnd = epub->calculateProgress(currentSpineIndex, 1.0f);
+      auto statistics = makeUniqueNoThrow<ReadingStatsActivity>(renderer, mappedInput, epub->getTitle(), progress,
+                                                                std::max(0.0f, chapterEnd - progress));
+      if (!statistics) {
+        LOG_ERR("ERS", "OOM: reading statistics activity");
+        break;
+      }
+      startActivityForResult(std::move(statistics), [this](const ActivityResult&) { requestUpdate(); });
+#endif
       break;
     }
     case EpubReaderMenuActivity::MenuAction::DISPLAY_QR: {
@@ -1106,6 +1130,9 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
   }
 
   RenderLock lock(*this);
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+  LocalReadingStats::breakSequence();
+#endif
   if (section) {
     rememberCurrentContentOffset();
     cachedSpineIndex = currentSpineIndex;
@@ -1188,6 +1215,9 @@ bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
 
 bool EpubReaderActivity::skipPages(int amount) {
   if (!section) return false;
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+  LocalReadingStats::breakSequence();
+#endif
   if (amount > 0) {
     RenderLock lock;
     nextPageNumber = 0;
@@ -1709,6 +1739,13 @@ bool EpubReaderActivity::applyDeferredReposition() {
   return changed;
 }
 
+void EpubReaderActivity::clearPendingNavigation() {
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+  LocalReadingStats::breakSequence();
+#endif
+  clearDeferredReposition();
+}
+
 void EpubReaderActivity::clearDeferredReposition() {
   cachedChapterTotalPageCount = 0;
   cachedVisibleTextOffset.reset();
@@ -2008,6 +2045,24 @@ void EpubReaderActivity::renderStatusBar() const {
   } else if (sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE) {
     title = epub ? epub->getTitle() : "";
   }
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+  else if (sb.titleMode == CrossPointSettings::CHAPTER_TIME_LEFT ||
+           sb.titleMode == CrossPointSettings::BOOK_TIME_LEFT) {
+    const float progress = epub ? epub->calculateProgress(currentSpineIndex, chapterPosition().chapterFraction()) : 0;
+    const bool chapter = sb.titleMode == CrossPointSettings::CHAPTER_TIME_LEFT;
+    const float end = chapter && epub ? epub->calculateProgress(currentSpineIndex, 1.0f) : 1.0f;
+    uint32_t seconds = 0;
+    if (epub && section && !section->isBuilding() &&
+        LocalReadingStats::estimateSeconds(std::max(0.0f, end - progress), seconds)) {
+      char estimate[96];
+      snprintf(estimate, sizeof(estimate), chapter ? tr(STR_READING_CHAPTER_MINUTES) : tr(STR_READING_BOOK_MINUTES),
+               static_cast<unsigned long>(seconds / 60 + (seconds % 60 != 0)));
+      title = estimate;
+    } else {
+      title = tr(STR_READING_PACE_LEARNING);
+    }
+  }
+#endif
 
   GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset, true, currentPageBookmarked,
                     section ? section->isBuilding() : false);
@@ -2355,7 +2410,7 @@ void EpubReaderActivity::handleOverlayInput() {
     target = std::clamp(target, 0, spineCount - 1);
     if (target != currentSpineIndex) {
       RenderLock lock;
-      clearDeferredReposition();
+      clearPendingNavigation();
       nextPageNumber = 0;
       currentSpineIndex = target;
       section.reset();
@@ -2466,7 +2521,7 @@ void EpubReaderActivity::handleOverlayInput() {
       const auto item = epub->getTocItem(panelIndex);
       if (item.spineIndex != -1) {
         RenderLock lock;
-        clearDeferredReposition();
+        clearPendingNavigation();
         currentSpineIndex = item.spineIndex;
         pendingAnchor = item.anchor;
         nextPageNumber = 0;
@@ -2617,6 +2672,9 @@ void EpubReaderActivity::applyReaderTextSettings() {
   // in-reader font change wouldn't take effect until re-opening the book.
   sdFontSystem.ensureLoaded(renderer);
   RenderLock lock;
+#if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
+  LocalReadingStats::breakSequence();
+#endif
   if (section) {
     rememberCurrentContentOffset();
     cachedSpineIndex = currentSpineIndex;
@@ -2779,7 +2837,7 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
 
   {
     RenderLock lock;
-    clearDeferredReposition();
+    clearPendingNavigation();
     pendingAnchor = std::move(anchor);
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = 0;
@@ -2843,7 +2901,7 @@ void EpubReaderActivity::restoreSavedPosition() {
 
   {
     RenderLock lock;
-    clearDeferredReposition();
+    clearPendingNavigation();
     currentSpineIndex = pos.spineIndex;
     nextPageNumber = pos.pageNumber;
     section.reset();

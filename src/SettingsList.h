@@ -472,8 +472,16 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           {StrId::STR_PROGRESS_BAR_THIN, StrId::STR_PROGRESS_BAR_MEDIUM, StrId::STR_PROGRESS_BAR_THICK},
                           "statusBarProgressBarThickness", StrId::STR_CUSTOMISE_STATUS_BAR),
         SettingInfo::Enum(StrId::STR_TITLE, &CrossPointSettings::statusBarTitle,
-                          {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE}, "statusBarTitle",
-                          StrId::STR_CUSTOMISE_STATUS_BAR),
+                          {
+                              StrId::STR_BOOK,
+                              StrId::STR_CHAPTER,
+                              StrId::STR_HIDE,
+#ifdef CROSSPOINT_ENABLE_BOOKORBIT_STATS
+                              StrId::STR_CHAPTER_TIME_LEFT,
+                              StrId::STR_BOOK_TIME_LEFT,
+#endif
+                          },
+                          "statusBarTitle", StrId::STR_CUSTOMISE_STATUS_BAR),
         SettingInfo::Toggle(StrId::STR_BATTERY, &CrossPointSettings::statusBarBattery, "statusBarBattery",
                             StrId::STR_CUSTOMISE_STATUS_BAR),
         SettingInfo::Enum(StrId::STR_XTC_STATUS_BAR, &CrossPointSettings::xtcStatusBarMode,
