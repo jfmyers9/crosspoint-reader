@@ -740,3 +740,31 @@ Book moves rename the store and its `.deleted` journal (plus recovery sidecars)
 together. The stored source path is informational and is refreshed on the next
 save; the current file path selects the store. Local book deletion cleans up all
 of these sidecars but preserves the independent `My Clippings.txt` export.
+
+## LRS1 — local reading statistics
+
+`/.crosspoint/local-reading-stats/global.bin` stores aggregate EPUB reading
+time; `<md5-of-book-path>.bin` in the same directory stores per-book time.
+Moving or renaming a book changes its identity. These records are independent
+of the BookOrbit upload queue and do not require credentials.
+
+Version 1 records are 256 bytes, with little-endian 32-bit fields:
+
+| Offset | Field |
+| --- | --- |
+| 0 | Magic `0x3153524c` (`LRS1`) |
+| 4 | Version `1` |
+| 8 | Lifetime reading seconds (saturating unsigned integer) |
+| 12 | 30 pairs: signed local date `YYYYMMDD`, unsigned reading seconds |
+| 252 | FNV-1a checksum of the preceding 252 bytes |
+
+A zero date denotes an unused slot. The store retains the newest 30 recorded
+dates; the dashboard displays the last 30 calendar days, filling gaps with
+zero. Unknown-clock time contributes to lifetime totals only. Estimates are
+session-local and are not persisted in this format.
+
+Dirty records are checkpointed at 30-second intervals and on pause. Saves use
+a validated `.tmp` file and retain a `.bak` recovery record. Invalid existing
+history is not silently replaced with an empty record. Global and per-book
+saves are individually recoverable, not one transaction: power loss between
+them can leave the two totals one checkpoint apart.
