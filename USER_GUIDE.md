@@ -737,6 +737,26 @@ The structured clipping store under `.crosspoint/clippings` keeps up to **4 KiB 
 
 Local book and folder moves carry clipping data with them. Deleting a local book removes its local clipping data; it does not delete already synced server copies or historical entries in `My Clippings.txt`. Deleting an individual clipping likewise leaves the text export untouched, but queues its server deletion for the next enabled manual sync. `My Clippings.txt` is an independent append-only export, not the source used to restore or sync highlights.
 
+### 5.4 Reading statistics (X4 Pro)
+
+While reading an EPUB, open **Reader Menu → Reading statistics** for today's
+reading time, all-time and current-book totals, chapter/book time estimates,
+and the last 30 days of history. No server account or network is required.
+TXT and XTC reading are not included.
+
+Choose **Chapter time left** or **Book time left** as the title in **Customise
+Status Bar** to display an estimate while reading. Estimates learn from normal
+forward page turns in the current book session; allow at least three qualifying
+turns and 30 seconds of reading. Menus and sleep do not count as reading, and an
+unchanged page contributes at most two minutes until reading resumes.
+
+Daily history uses the device's configured local timezone and requires a valid
+clock. Reading with an unknown clock still counts toward lifetime totals but
+is not assigned retrospectively to a calendar day. History is saved on SD under
+`/.crosspoint/local-reading-stats/`; moving or renaming a book starts a separate
+per-book history. Totals are checkpointed every 30 seconds and when leaving
+reading. Unexpected power loss may lose recent unsaved time.
+
 ## 6. Current Limitations & Roadmap
 
 Please note that this firmware is currently in active development. The following features are **not yet supported** but are planned for future updates:
