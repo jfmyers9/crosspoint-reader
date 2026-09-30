@@ -12,6 +12,10 @@
 #include <I18n.h>
 #include <Memory.h>
 #include <PNGdec.h>
+
+// PNGdec's zlib macro conflicts with variable names in FreeInk UI headers.
+#undef local
+
 #include <Xtc.h>
 
 #include <algorithm>
