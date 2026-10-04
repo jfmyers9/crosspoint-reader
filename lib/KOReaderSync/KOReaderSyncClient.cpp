@@ -437,8 +437,9 @@ KOReaderSyncClient::Error KOReaderSyncClient::postExtension(const char* suffix, 
   }
   const std::string baseUrl = KOREADER_STORE.getBaseUrl();
   if (!isBookOrbitUrl(baseUrl) || !suffix ||
-      (strcmp(suffix, "/plugin/page-stats") != 0 && strcmp(suffix, "/plugin/sweeps") != 0)) {
-    LOG_ERR("KOSync", "Unsupported statistics endpoint");
+      (strcmp(suffix, "/plugin/page-stats") != 0 && strcmp(suffix, "/plugin/sweeps") != 0 &&
+       strcmp(suffix, "/plugin/annotations") != 0)) {
+    LOG_ERR("KOSync", "Unsupported BookOrbit endpoint");
     return SERVER_ERROR;
   }
   const std::string url = baseUrl + suffix;

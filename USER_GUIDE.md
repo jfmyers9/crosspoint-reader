@@ -648,7 +648,50 @@ With touch reader controls enabled, long-press a word on the reading page to ope
 
 Open **Bookmarks & highlights** in the reader menu to revisit a highlight. Long-press its row to rename or delete it. Highlights work without an installed dictionary and remain anchored when font size, margins, or orientation change. They are stored with bookmarks under `/.crosspoint/bookmarks/`, outside the disposable section cache.
 
-Selection currently stays within one page. Some synthetic or table text, and words changed by Unicode normalization, have no reliable source position and cannot be highlighted. Quotes are limited to 2,048 UTF-8 bytes; new highlights cannot be added once a book has 512 combined bookmarks/highlights. Notes, cross-page selection, and highlight synchronization are not supported.
+Selection currently stays within one page. Some synthetic or table text, and words changed by Unicode normalization, have no reliable source position and cannot be highlighted. Quotes are limited to 2,048 UTF-8 bytes; new highlights cannot be added once a book has 512 combined bookmarks/highlights. Notes and cross-page selection are not supported.
+
+#### BookOrbit highlight export (personal X4 Pro build)
+
+With BookOrbit configured as the KOReader sync server (`/api/v1/koreader`),
+**Sync Progress** also uploads the current EPUB's highlights using the existing
+account and network transport. Other sync servers receive no highlight requests.
+No BookOrbit server changes are required.
+
+- Quotes become underlined annotations; a highlight's label becomes its note.
+- This is **one-way, additive export**, not two-way synchronization. Renaming a
+  local highlight updates its exported note, but deleting one locally does not
+  delete it in BookOrbit. Remote edits/deletions are not applied to the reader.
+  An annotation deleted in BookOrbit is not resurrected by a retry.
+- The same book content must be recognized by BookOrbit. An unmatched book needs
+  to be imported or linked there before retrying. Filename matching for progress
+  does not replace the content hash used for highlight export.
+- Export identities and acknowledgements live under
+  `/.crosspoint/bookorbit-highlights/`, scoped to server, account, device, and book.
+  Keep this directory with SD backups: removing it can create duplicate exports.
+  Bookmark files themselves are unchanged.
+- Highlights have no original creation timestamp. The first export reserves a
+  persistent UTC identity timestamp; same-second imports get distinct consecutive
+  seconds. This is an export identity, **not a reconstructed creation date**.
+  A valid device clock is needed for first exports and edits.
+- Each sync uploads at most 32 changed highlights and checks a 45-second work
+  budget between requests, allowing at least one attempt after scanning an
+  acknowledged prefix. Repeat Sync Progress if more remain. Failed requests
+  retain their identity and pending revision, so retries are idempotent.
+- Positions are converted from exact EPUB text offsets, never guessed from page
+  percentages, and the selected source text must match the saved quote. Ambiguous
+  whitespace, unsupported markup/entities, corrupt files, stale offsets after a
+  book replacement, or an unreadable chapter can prevent export. The local
+  highlight is retained; other resolvable highlights can still export.
+
+Highlight export runs before progress exchange, but an incomplete export does not
+block progress sync. A warning remains on the success screen until dismissed;
+retry Sync Progress to resume the pending highlights. An in-flight network
+request may exceed the work budget.
+
+After updating firmware, test a short highlight in a matched EPUB: sync, confirm
+its quote and note in BookOrbit, then sync again and check that no duplicate is
+created. Test label edits, offline retry, and several passages/Unicode text before
+relying on position interoperability with KOReader.
 
 ### System Navigation
 

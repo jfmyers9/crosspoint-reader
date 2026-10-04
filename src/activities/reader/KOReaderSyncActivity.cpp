@@ -1,5 +1,6 @@
 #include "KOReaderSyncActivity.h"
 
+#include <BookOrbitAnnotations.h>
 #include <BookOrbitStats.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -99,7 +100,15 @@ void KOReaderSyncActivity::saveProgressAndReturn(int spineIndex, int page) {
   if (!ReadingStatus::update(epubPath, remoteProgress.percentage, remoteProgress.percentage == 1.0f)) {
     LOG_ERR("KOSync", "Failed to save library reading status");
   }
-  returnToReader();
+  if (highlightSyncWarning) {
+    {
+      RenderLock lock(*this);
+      state = SYNC_COMPLETE;
+    }
+    requestUpdate(true);
+  } else {
+    returnToReader();
+  }
 }
 
 void KOReaderSyncActivity::returnToReader() { activityManager.goToReader(epubPath); }
@@ -108,7 +117,10 @@ bool KOReaderSyncActivity::smartSyncEnabled() const {
   return KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART;
 }
 
-void KOReaderSyncActivity::markAutoReturn() { autoReturnAt = millis() + AUTO_RETURN_DELAY_MS; }
+void KOReaderSyncActivity::markAutoReturn() {
+  // Leave partial-sync warnings visible until explicitly dismissed.
+  if (!highlightSyncWarning) autoReturnAt = millis() + AUTO_RETURN_DELAY_MS;
+}
 
 void KOReaderSyncActivity::completeAlreadySynced() {
   {
@@ -142,6 +154,20 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
   requestUpdate(true);
 
   BookOrbitStats::sync();
+
+  {
+    RenderLock lock(*this);
+    statusMessage = tr(STR_HIGHLIGHTS_SYNCING);
+  }
+  requestUpdateAndWait();
+  const auto highlights = BookOrbitAnnotations::sync(epubPath);
+  if (highlights == BookOrbitAnnotations::Result::Failed || highlights == BookOrbitAnnotations::Result::Pending ||
+      highlights == BookOrbitAnnotations::Result::Unmatched) {
+    RenderLock lock(*this);
+    highlightSyncWarning = highlights == BookOrbitAnnotations::Result::Pending     ? tr(STR_HIGHLIGHTS_SYNC_PENDING)
+                           : highlights == BookOrbitAnnotations::Result::Unmatched ? tr(STR_HIGHLIGHTS_SYNC_UNMATCHED)
+                                                                                   : tr(STR_HIGHLIGHTS_SYNC_FAILED);
+  }
 
   // KOSync requests from CrossPoint do not include a client timestamp.
   performSync();
@@ -534,6 +560,13 @@ void KOReaderSyncActivity::buildResultScreen(UiScreen& screen) {
                                                 static_cast<int16_t>(metrics.buttonHintsHeight), 0});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
+  if (highlightSyncWarning) {
+    auto warningStyle = screen.theme().smallText;
+    warningStyle.align = fui::TextAlign::Center;
+    screen.target().text(screen.takeTop(screen.target().lineHeight(warningStyle.font), screen.theme().spaceMd),
+                         highlightSyncWarning, warningStyle);
+  }
+
   if (state == SHOWING_RESULT) {
     // Chapter names (remote requires the lazily-loaded Epub; local was
     // pre-computed before the Epub was released).
@@ -719,6 +752,9 @@ void KOReaderSyncActivity::render(RenderLock&&) {
     UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top,
                               state == UPLOAD_COMPLETE ? tr(STR_UPLOAD_SUCCESS) : tr(STR_ALREADY_SYNCED), true,
                               EpdFontFamily::BOLD);
+    if (highlightSyncWarning) {
+      UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top + 40, highlightSyncWarning);
+    }
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -727,6 +763,9 @@ void KOReaderSyncActivity::render(RenderLock&&) {
   }
 
   if (state == SYNC_FAILED) {
+    if (highlightSyncWarning) {
+      UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top - 40, highlightSyncWarning);
+    }
     UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top, tr(STR_SYNC_FAILED_MSG), true, EpdFontFamily::BOLD);
     UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top + 40, statusMessage.c_str());
     UITheme::drawCenteredText(renderer, screen, UI_10_FONT_ID, top + 80, failureServer);

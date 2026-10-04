@@ -31,6 +31,16 @@ class ChapterXPathResolver {
   static std::string findXPathForVisibleTextOffset(const std::shared_ptr<Epub>& epub, int spineIndex,
                                                    uint32_t visibleTextOffset);
 
+  // Resolve a nonempty [start, end) range of renderer-visible Unicode codepoints.
+  // Text-node coordinates use current KOReader/CRengine's lString32 codepoints, not UTF-16.
+  // No clamping or progress fallback;
+  // malformed/unresolvable content returns false and clears both outputs.
+  // A nonempty expectedQuote verifies the selected source text (ASCII whitespace
+  // collapsed/trimmed, otherwise byte-exact). Quotes/range text over 2048 bytes fail.
+  static bool findXPathRangeForVisibleTextOffsets(const std::shared_ptr<Epub>& epub, int spineIndex, uint32_t start,
+                                                  uint32_t end, std::string& pos0, std::string& pos1,
+                                                  const std::string& expectedQuote = {});
+
   /**
    * Resolve intra-spine progress to a real XHTML ancestry path plus text offset.
    *
