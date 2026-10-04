@@ -8,6 +8,9 @@
 // derivation (BookmarkUtil) and directory creation are hidden inside.
 namespace BookmarkFile {
 
+// Creation limit only: loading/saving must preserve larger existing collections.
+static constexpr std::size_t MAX_ENTRIES_FOR_NEW_HIGHLIGHT = 512;
+
 // Loads the bookmarks for bookPath. The vector is cleared first; a missing or
 // empty bookmark file yields an empty list and returns false.
 bool load(const std::string& bookPath, std::vector<BookmarkEntry>& bookmarks);

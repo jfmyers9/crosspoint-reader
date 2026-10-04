@@ -15,6 +15,27 @@
 #include <vector>
 
 namespace {
+constexpr size_t MAX_HIGHLIGHT_QUOTE_BYTES = 2048;
+
+bool isAsciiWhitespace(uint32_t cp) { return cp == ' ' || (cp >= '\t' && cp <= '\r'); }
+
+bool normalizeQuote(const std::string& source, std::string& normalized) {
+  if (source.size() > MAX_HIGHLIGHT_QUOTE_BYTES) return false;
+  // Only the bounded expected quote is allocated; source chapter text is compared as it streams.
+  normalized.reserve(source.size());
+  bool pendingSpace = false;
+  for (const unsigned char byte : source) {
+    if (isAsciiWhitespace(byte)) {
+      pendingSpace = !normalized.empty();
+    } else {
+      if (pendingSpace) normalized += ' ';
+      normalized += static_cast<char>(byte);
+      pendingSpace = false;
+    }
+  }
+  return !normalized.empty();
+}
+
 std::string stripPrefix(const XML_Char* name) {
   if (!name) {
     return "";
@@ -360,8 +381,9 @@ class XPathProgressResolver final : public Print {
   enum class BoundaryMode { Exclusive, Inclusive };
 
   explicit XPathProgressResolver(const size_t targetVisibleChar,
-                                 const BoundaryMode boundaryMode = BoundaryMode::Exclusive)
-      : targetVisibleChar(targetVisibleChar), boundaryMode(boundaryMode) {
+                                 const BoundaryMode boundaryMode = BoundaryMode::Exclusive,
+                                 const bool strictRange = false)
+      : targetVisibleChar(targetVisibleChar), boundaryMode(boundaryMode), strictRange(strictRange) {
     parser = XML_ParserCreate(nullptr);
     if (!parser) {
       LOG_ERR("KOX", "Failed to create XML parser");
@@ -375,11 +397,24 @@ class XPathProgressResolver final : public Print {
     XML_SetProcessingInstructionHandler(parser, &XPathProgressResolver::processingInstruction);
     XML_SetCdataSectionHandler(parser, &XPathProgressResolver::startCdataSection,
                                &XPathProgressResolver::endCdataSection);
+    if (strictRange) {
+      // Do not silently drop entities that the renderer's HTML entity handler counts.
+      XML_SetDefaultHandler(parser, &XPathProgressResolver::unhandledData);
+      XML_SetSkippedEntityHandler(parser, &XPathProgressResolver::skippedEntity);
+    }
   }
 
   ~XPathProgressResolver() override { destroyXmlParser(parser); }
 
   bool ok() const { return parser != nullptr && parseOk; }
+
+  void verifyQuote(uint32_t start, uint32_t end, const std::string& expected) {
+    quoteStart = start;
+    quoteEnd = end;
+    expectedQuote = &expected;
+  }
+
+  bool quoteMatches() const { return !expectedQuote || (quoteOk && quotePosition == expectedQuote->size()); }
 
   bool finish() {
     if (!parser || !parseOk || stopped) {
@@ -417,6 +452,14 @@ class XPathProgressResolver final : public Print {
   int spineIndex = 0;
 
  private:
+  static void XMLCALL unhandledData(void* userData, const XML_Char* data, int len) {
+    if (len > 0 && data[0] == '&') static_cast<XPathProgressResolver*>(userData)->parseOk = false;
+  }
+
+  static void XMLCALL skippedEntity(void* userData, const XML_Char*, int) {
+    static_cast<XPathProgressResolver*>(userData)->parseOk = false;
+  }
+
   static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char**) {
     auto* self = static_cast<XPathProgressResolver*>(userData);
     self->onStartElement(name);
@@ -456,21 +499,22 @@ class XPathProgressResolver final : public Print {
     const std::string name = stripPrefix(rawName);
 
     if (!insideBody) {
-      if (name == "body") {
+      if (name == "body" || (strictRange && VisibleTextUtils::equalsTag(name, "body"))) {
         insideBody = true;
         bodyDepth = depth;
         parentStates.emplace_back();
-        textNodeIndexStack.push_back(0);
+        textNodeIndexStack.push_back({});
       }
       depth++;
       return;
     }
 
-    pendingTextNode = true;
+    finishStrictTextNode();
     const int siblingIndex = parentStates.back().nextIndex(name);
     path.push_back({name, siblingIndex});
     parentStates.emplace_back();
-    textNodeIndexStack.push_back(0);
+    textNodeIndexStack.push_back({});
+    pendingTextNode = true;
 
     if (nonVisibleDepth > 0 || VisibleTextUtils::isNonVisibleElement(name)) {
       nonVisibleDepth++;
@@ -482,12 +526,13 @@ class XPathProgressResolver final : public Print {
   void onEndElement(const XML_Char* rawName) {
     const std::string name = stripPrefix(rawName);
 
+    finishStrictTextNode();
     depth--;
     if (!insideBody) {
       return;
     }
 
-    if (depth == bodyDepth && name == "body") {
+    if (depth == bodyDepth && (name == "body" || (strictRange && VisibleTextUtils::equalsTag(name, "body")))) {
       insideBody = false;
       parentStates.clear();
       path.clear();
@@ -535,10 +580,46 @@ class XPathProgressResolver final : public Print {
     // resolver does not see, so such a run is counted here like any other.
     if (pendingTextNode) {
       if (!textNodeIndexStack.empty()) {
-        textNodeIndexStack.back()++;
+        textNodeIndexStack.back().index++;
       }
       textNodeStartChars = visibleChars;
+      textNodeCodepoints = 0;
+      nodeHasNonSpace = false;
+      nodeLastSpace = false;
+      nodeAmbiguousWhitespace = false;
+      nodeHasEndpoint = false;
       pendingTextNode = false;
+    }
+
+    if (strictRange) {
+      const auto* ptr = reinterpret_cast<const unsigned char*>(data);
+      const auto* end = ptr + len;
+      while (ptr < end) {
+        // Start affinity selects the next character's node; end affinity keeps
+        // the preceding character's node, including a final text-node boundary.
+        if (xpath.empty() && boundaryMode == BoundaryMode::Exclusive && targetVisibleChar == visibleChars) {
+          xpath = buildParagraphXPath(spineIndex, path, textNodeIndexStack.back().index, textNodeCodepoints);
+          nodeHasEndpoint = true;
+        }
+        const auto* cpStart = ptr;
+        const uint32_t cp = utf8NextCodepoint(&ptr);
+        if (expectedQuote && visibleChars >= quoteStart && visibleChars < quoteEnd) {
+          compareQuoteCodepoint(cp, cpStart, static_cast<size_t>(ptr - cpStart));
+        }
+        const bool space = cp == ' ' || cp == '\n' || cp == '\r' || cp == '\t';
+        if (space && (textNodeCodepoints == 0 || nodeLastSpace || cp != ' ')) nodeAmbiguousWhitespace = true;
+        nodeHasNonSpace |= !space;
+        nodeLastSpace = space;
+        // CRengine's ldomXPointer indexes lString32 text, including non-BMP characters.
+        ++textNodeCodepoints;
+        ++visibleChars;
+        if (xpath.empty() && boundaryMode == BoundaryMode::Inclusive && targetVisibleChar == visibleChars) {
+          xpath = buildParagraphXPath(spineIndex, path, textNodeIndexStack.back().index, textNodeCodepoints);
+          nodeHasEndpoint = true;
+        }
+      }
+      // Validate the complete XML stream even after finding the endpoint.
+      return;
     }
 
     // Whitespace-only runs are never used as anchors: a target that falls inside one is
@@ -548,7 +629,7 @@ class XPathProgressResolver final : public Print {
                                                                        : targetVisibleChar < nextVisibleChars;
     if (targetReached && !whitespaceOnly) {
       const size_t delta = targetVisibleChar > visibleChars ? targetVisibleChar - visibleChars : 0;
-      const int texNode = textNodeIndexStack.empty() ? 0 : textNodeIndexStack.back();
+      const int texNode = textNodeIndexStack.empty() ? 0 : textNodeIndexStack.back().index;
       const size_t charOff = visibleChars - textNodeStartChars + delta;
       xpath = buildParagraphXPath(spineIndex, path, texNode, charOff);
       stopped = true;
@@ -560,6 +641,7 @@ class XPathProgressResolver final : public Print {
   }
 
   void onMarkupBoundary() {
+    finishStrictTextNode();
     if (!insideBody || nonVisibleDepth > 0 || stopped) {
       return;
     }
@@ -567,9 +649,48 @@ class XPathProgressResolver final : public Print {
     pendingTextNode = true;
   }
 
+  void finishStrictTextNode() {
+    if (!strictRange || pendingTextNode || !insideBody || nonVisibleDepth > 0 || textNodeIndexStack.empty()) return;
+    auto& node = textNodeIndexStack.back();
+    // CRengine may collapse/trim whitespace or omit whitespace-only nodes depending
+    // on CSS. Without that DOM, reject ambiguous endpoints rather than export drift.
+    if (nodeHasEndpoint && (node.uncertainIndex || nodeAmbiguousWhitespace || nodeLastSpace || !nodeHasNonSpace)) {
+      parseOk = false;
+    }
+    if (!nodeHasNonSpace) node.uncertainIndex = true;
+    pendingTextNode = true;
+  }
+
+  void compareQuoteCodepoint(uint32_t cp, const unsigned char* bytes, size_t byteCount) {
+    if (!quoteOk) return;
+    quoteBytes += byteCount;
+    if (quoteBytes > MAX_HIGHLIGHT_QUOTE_BYTES) {
+      quoteOk = false;
+      return;
+    }
+    if (isAsciiWhitespace(cp)) {
+      quotePendingSpace = quotePosition > 0;
+      return;
+    }
+    if (quotePendingSpace) {
+      if (quotePosition >= expectedQuote->size() || (*expectedQuote)[quotePosition++] != ' ') {
+        quoteOk = false;
+        return;
+      }
+      quotePendingSpace = false;
+    }
+    if (byteCount > expectedQuote->size() - quotePosition ||
+        std::memcmp(expectedQuote->data() + quotePosition, bytes, byteCount) != 0) {
+      quoteOk = false;
+      return;
+    }
+    quotePosition += byteCount;
+  }
+
   XML_Parser parser = nullptr;
   const size_t targetVisibleChar;
   const BoundaryMode boundaryMode;
+  const bool strictRange;
   bool parseOk = true;
   bool insideBody = false;
   bool stopped = false;
@@ -579,7 +700,23 @@ class XPathProgressResolver final : public Print {
   uint16_t nonVisibleDepth = 0;
   size_t visibleChars = 0;
   size_t textNodeStartChars = 0;
-  std::vector<int> textNodeIndexStack;
+  size_t textNodeCodepoints = 0;
+  struct TextNodeState {
+    int index = 0;
+    bool uncertainIndex = false;
+  };
+  bool nodeHasNonSpace = false;
+  bool nodeLastSpace = false;
+  bool nodeAmbiguousWhitespace = false;
+  bool nodeHasEndpoint = false;
+  const std::string* expectedQuote = nullptr;
+  uint32_t quoteStart = 0;
+  uint32_t quoteEnd = 0;
+  size_t quotePosition = 0;
+  size_t quoteBytes = 0;
+  bool quotePendingSpace = false;
+  bool quoteOk = true;
+  std::vector<TextNodeState> textNodeIndexStack;
   std::vector<ParentState> parentStates;
   std::vector<PathSegment> path;
   std::string xpath;
@@ -645,6 +782,41 @@ std::string ChapterXPathResolver::findXPathForVisibleTextOffset(const std::share
 
   LOG_DBG("KOX", "Visible offset %u not found in spine %d", visibleTextOffset, spineIndex);
   return "";
+}
+
+bool ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(const std::shared_ptr<Epub>& epub, const int spineIndex,
+                                                               const uint32_t start, const uint32_t end,
+                                                               std::string& pos0, std::string& pos1,
+                                                               const std::string& expectedQuote) {
+  pos0.clear();
+  pos1.clear();
+  if (!epub || start >= end || spineIndex < 0 || spineIndex >= epub->getSpineItemsCount()) return false;
+  const auto href = epub->getSpineItem(spineIndex).href;
+  if (href.empty()) return false;
+  std::string normalizedQuote;
+  if (!expectedQuote.empty() && !normalizeQuote(expectedQuote, normalizedQuote)) return false;
+
+  // Sequential passes keep only one streaming parser (and no chapter-sized DOM) resident.
+  const auto resolve = [&](uint32_t offset, XPathProgressResolver::BoundaryMode mode, std::string& result) {
+    XPathProgressResolver resolver(offset, mode, true);
+    resolver.spineIndex = spineIndex;
+    if (mode == XPathProgressResolver::BoundaryMode::Exclusive && !expectedQuote.empty()) {
+      resolver.verifyQuote(start, end, normalizedQuote);
+    }
+    if (!resolver.ok() || !epub->readItemContentsToStream(href, resolver, 1024) || !resolver.finish() ||
+        !resolver.hasMatch() || !resolver.quoteMatches())
+      return false;
+    result = resolver.getXPath();
+    return true;
+  };
+  std::string first;
+  std::string last;
+  if (!resolve(start, XPathProgressResolver::BoundaryMode::Exclusive, first) ||
+      !resolve(end, XPathProgressResolver::BoundaryMode::Inclusive, last))
+    return false;
+  pos0 = std::move(first);
+  pos1 = std::move(last);
+  return true;
 }
 
 std::string ChapterXPathResolver::findXPathForProgress(const std::shared_ptr<Epub>& epub, const int spineIndex,

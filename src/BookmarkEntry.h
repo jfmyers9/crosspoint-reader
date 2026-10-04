@@ -6,9 +6,10 @@
 // A single bookmark entry — a position in a book.
 struct BookmarkEntry {
   static constexpr std::size_t MAX_NAME_LENGTH = 128;
+  static constexpr std::size_t MAX_HIGHLIGHT_QUOTE_LENGTH = 2048;
 
   std::string xpath;    // XPath-like progress string
-  std::string summary;  // First few words of a page to help identify it
+  std::string summary;  // Page preview, or selected quote for a highlight
   std::string name;     // Optional user-provided label
   float percentage;     // Progress percentage (0.0 to 1.0)
 
@@ -21,4 +22,8 @@ struct BookmarkEntry {
   // font/margin/orientation. Absent (hasVisibleTextOffset == false) for pre-offset bookmarks.
   bool hasVisibleTextOffset = false;
   uint32_t visibleTextOffset = 0;
+  // Exclusive end in the same spine's visible-codepoint coordinates. Zero means a bookmark.
+  uint32_t highlightEndOffset = 0;
+
+  bool isHighlight() const { return hasVisibleTextOffset && highlightEndOffset > visibleTextOffset; }
 };
