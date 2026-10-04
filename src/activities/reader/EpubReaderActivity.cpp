@@ -1608,6 +1608,7 @@ void EpubReaderActivity::beginLoanTimeSync() {
 }
 
 void EpubReaderActivity::render(RenderLock&& lock) {
+  if (isAtEndOfBook()) BookOrbitStats::pause();
   if (loadFailurePopup.isActive()) {
     renderer.clearScreen();
     loadFailurePopup.processRender(renderer, mappedInput);
@@ -1652,11 +1653,6 @@ bool EpubReaderActivity::skipLoopDelay() {
   // is down: a press that starts inside a long build step gets its second debounce sample ~5 ms
   // after the step instead of after a 10 ms sleep.
   return overlay == Overlay::None && !buildHeapPaused && backgroundBuildWanted();
-}
-
-void EpubReaderActivity::render(RenderLock&& lock) {
-  if (isAtEndOfBook()) BookOrbitStats::pause();
-  ReaderActivity::render(std::move(lock));
 }
 
 void EpubReaderActivity::renderBook() {
