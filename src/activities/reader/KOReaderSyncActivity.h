@@ -53,6 +53,7 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
 
   State state = WIFI_SELECTION;
   std::string statusMessage;
+  const char* highlightSyncWarning = nullptr;
   char failureServer[96] = {};
   char failureContext[96] = {};
   const char* failureHint = nullptr;

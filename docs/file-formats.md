@@ -2,6 +2,34 @@
 
 These formats describe SD-card records under `/.crosspoint/`.
 
+## BookOrbit highlight export (version 1)
+
+`bookorbit-highlights/<scope-md5>/<book-content-md5>/` contains export state,
+not copies of highlights. Scope hashes the sync server URL, username, and device
+identity separated by newlines. The book hash is the KOReader content identity.
+The source bookmarks remain under `bookmarks/`.
+
+Each `<anchor-md5>.state` hashes `spine:start:end` and contains one line:
+
+```text
+BOH1 <identity-UTC-epoch> <revision-UTC-epoch> <pending-md5> <acknowledged-md5-or-dash>
+```
+
+The revision digest hashes `1:<spine>:<start>:<end>:<quote-byte-length>:<quote>:<label>`.
+An unchanged export is skipped only when both pending and acknowledged digests
+match. Identity/revision timestamps are persisted before network transmission;
+acknowledgement is recorded only after the server accepts the matching book.
+Lost replies or failed acknowledgement writes therefore replay the same identity.
+These timestamps describe export identity, not original highlight creation.
+
+The per-book `clock` file contains `BOHC1 <last-reserved-UTC-epoch>`. Its sequence
+prevents BookOrbit's same-datetime reconciliation from conflating a batch of local
+highlights. Files are staged in `.tmp` and promoted with a recoverable `.bak`.
+Missing primaries can be read from backup; malformed primaries fail closed.
+All files are bounded to less than 160 bytes. Retain this directory with SD
+backups; deleting it loses deduplication state. Local deletion never sends a
+server tombstone, and server acknowledgements may include already-deleted items.
+
 ## Reading status (version 1)
 
 `reading-status/<64-bit-FNV-1a-path-hash>.bin` stores durable reading state,
