@@ -52,6 +52,9 @@ class MappedInputManager {
 #endif
   bool wasPressed(Button button) const;
   bool wasReleased(Button button) const;
+  // Raw physical button edges for dismissing hints, independent of logical mappings.
+  bool wasAnyPressed() const { return gpio.wasAnyPressed(); }
+  bool wasAnyReleased() const { return gpio.wasAnyReleased(); }
   // One-shot threshold event while the button is down; consumes its release.
   bool wasLongPressed(Button button, unsigned long thresholdMs) const;
   bool consumeSuppressedRelease() const;

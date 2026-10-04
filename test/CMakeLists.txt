@@ -76,6 +76,7 @@ add_subdirectory(word_selection_state)
 add_subdirectory(bookmark_file)
 add_subdirectory(home_button)
 add_subdirectory(button_press_navigation)
+add_subdirectory(mapped_input_edges)
 
 add_subdirectory(inflate_stream)
 add_subdirectory(fs_helpers)
