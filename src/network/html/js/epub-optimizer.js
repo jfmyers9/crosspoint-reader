@@ -922,7 +922,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
           // Split by WIDTH (vertical cuts) - from RIGHT to LEFT for CW, LEFT to RIGHT for CCW
           const parts = [];
           const maxW = MAX_WIDTH;  // 480
-          
+
           // Centered distribution: calculate numParts first, then distribute evenly
           let overlapPx, step, numParts;
           const minOverlapPx = Math.round(maxW * (OVERLAP_PERCENT / 100));  // Configurable overlap
@@ -1023,7 +1023,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
           // Split by WIDTH (vertical cuts) - LEFT to RIGHT (natural reading order)
           const parts = [];
           const maxW = MAX_WIDTH;
-          
+
           // Centered distribution: calculate numParts first, then distribute evenly
           let overlapPx, step, numParts;
           const minOverlapPx = Math.round(maxW * (OVERLAP_PERCENT / 100));  // Configurable overlap
@@ -1105,7 +1105,7 @@ async function processImage(data, imageState = 0, imagePath = '') {
 
         // Step 2: Scale to fit 480x800 (if needed)
         const fitsInScreen = rotW <= MAX_WIDTH && rotH <= MAX_HEIGHT;
-        
+
         if (fitsInScreen && !sourceWasCropped) {
           // Already fits after rotation - just apply grayscale
           applyGrayscale(rotCtx, rotW, rotH);
@@ -1607,4 +1607,3 @@ async function convertEpubFile(file, progressCallback) {
 
   return newBlob;
 }
-
