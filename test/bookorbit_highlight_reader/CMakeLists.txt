@@ -8,6 +8,7 @@ target_include_directories(BookOrbitHighlightReaderTest PRIVATE
   stubs
   ${REPO_ROOT}/src
   ${REPO_ROOT}/lib/BookOrbit
+  ${REPO_ROOT}/lib/Memory
   ${arduinojson_SOURCE_DIR}/src
 )
 target_link_libraries(BookOrbitHighlightReaderTest PRIVATE crosspoint_test_common GTest::gtest_main)

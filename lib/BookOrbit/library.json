@@ -1,0 +1,6 @@
+{
+  "name": "BookOrbit",
+  "build": {
+    "flags": ["-I ../../src"]
+  }
+}
