@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <utility>
 
-#include "components/themes/BaseTheme.h"
+#include "components/themes/ThemeGeometry.h"
 
 namespace selectionGeometry {
 // Consume press edges only: display refresh can outlast the input's held-state snapshot.

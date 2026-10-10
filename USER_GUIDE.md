@@ -671,7 +671,12 @@ With BookOrbit configured as the KOReader sync server (`/api/v1/koreader`),
 account and network transport. Other sync servers receive no highlight requests.
 No BookOrbit server changes are required.
 
-- Quotes become underlined annotations; a highlight's label becomes its note.
+- New selections use upstream clippings. Existing personal bookmark highlights
+  remain visible on the page and accessible/deletable in the bookmarks list.
+  Both stores are exported; an identical spine/start/end anchor is exported only
+  once, preferring the legacy highlight so its label remains the BookOrbit note.
+  New clippings have no note; chapter titles are not exported as user notes.
+- Quotes become underlined annotations; a legacy highlight's label becomes its note.
 - This is **one-way, additive export**, not two-way synchronization. Renaming a
   local highlight updates its exported note, but deleting one locally does not
   delete it in BookOrbit. Remote edits/deletions are not applied to the reader.
@@ -682,7 +687,7 @@ No BookOrbit server changes are required.
 - Export identities and acknowledgements live under
   `/.crosspoint/bookorbit-highlights/`, scoped to server, account, device, and book.
   Keep this directory with SD backups: removing it can create duplicate exports.
-  Bookmark files themselves are unchanged.
+  Existing bookmark highlights retain their original storage and export identities.
 - Highlights have no original creation timestamp. The first export reserves a
   persistent UTC identity timestamp; same-second imports get distinct consecutive
   seconds. This is an export identity, **not a reconstructed creation date**.
@@ -696,6 +701,12 @@ No BookOrbit server changes are required.
   whitespace, unsupported markup/entities, corrupt files, stale offsets after a
   book replacement, or an unreadable chapter can prevent export. The local
   highlight is retained; other resolvable highlights can still export.
+- Binary clippings without exact source offsets, quotes over 2048 UTF-8 bytes,
+  and unreadable clipping data fail preflight before any highlights are uploaded.
+  Upstream permits quotes up to 4096 bytes locally; larger quotes are never
+  truncated for export. Shorten/recreate the unsupported clipping or remove it
+  locally to allow export. Upstream clipping sync flags and deletion journals are
+  independent and are not consumed by BookOrbit export.
 
 Highlight export runs before progress exchange, but an incomplete export does not
 block progress sync. A warning remains on the success screen until dismissed;
@@ -706,6 +717,7 @@ After updating firmware, test a short highlight in a matched EPUB: sync, confirm
 its quote and note in BookOrbit, then sync again and check that no duplicate is
 created. Test label edits, offline retry, and several passages/Unicode text before
 relying on position interoperability with KOReader.
+
 ### System Navigation
 
 * **Return to Home:** Press the **Back** button to close the book and return to the **[Home](#31-home-screen)** screen.
