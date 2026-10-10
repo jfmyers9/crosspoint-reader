@@ -40,8 +40,12 @@ class HttpDownloader {
   // Plain HTTP (including HTTP inside WireGuard) needs no TLS record buffers.
   // Keep the TLS floor for all other URLs; this does not guarantee allocation
   // success, so transports must still handle OOM normally.
-  static constexpr bool hasDownloadHeapHeadroom(std::string_view url, uint32_t freeHeap, uint32_t maxAlloc) {
-    return url.substr(0, 7) == "http://" || (freeHeap >= MIN_TLS_FREE_HEAP && maxAlloc >= MIN_TLS_MAX_ALLOC);
+  // The SDK exposes only same-origin status, not the effective redirect scheme.
+  // Require TLS headroom for a different origin, even if it might still be HTTP.
+  static constexpr bool hasDownloadHeapHeadroom(std::string_view url, uint32_t freeHeap, uint32_t maxAlloc,
+                                                bool sameOrigin = true) {
+    return (sameOrigin && url.substr(0, 7) == "http://") ||
+           (freeHeap >= MIN_TLS_FREE_HEAP && maxAlloc >= MIN_TLS_MAX_ALLOC);
   }
 
   /**
