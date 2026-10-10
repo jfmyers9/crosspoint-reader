@@ -11,6 +11,8 @@
 #include <WireGuardLwIP.h>
 #include <microlink.h>
 #include <wireguardif.h>
+
+#include "WireGuardClock.h"
 #endif
 
 namespace {
@@ -210,6 +212,7 @@ bool TailscaleManager::start(uint32_t peerIp) {
   }
   const AuthKeyStatus authKeyStatus = loadAuthKey();
   if (authKeyStatus == AuthKeyStatus::Invalid) return false;
+  if (!prepareWireGuardClock()) return false;
 
   const uint8_t connectionCount = authKeyStatus == AuthKeyStatus::Loaded ? 2 : 1;
   for (uint8_t connection = 0; connection < connectionCount; ++connection) {
