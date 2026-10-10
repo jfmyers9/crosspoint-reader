@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -33,6 +34,14 @@ class HttpDownloader {
   // downloadToFile() and fail into their error UI instead.
   static constexpr uint32_t MIN_TLS_FREE_HEAP = 40000;
   static constexpr uint32_t MIN_TLS_MAX_ALLOC = 20000;
+
+  // Plain HTTP needs no TLS buffers. The SDK hides the redirect scheme, so
+  // conservatively require TLS headroom after an origin change.
+  static constexpr bool hasDownloadHeapHeadroom(std::string_view url, uint32_t freeHeap, uint32_t maxAlloc,
+                                                bool sameOrigin = true) {
+    return (sameOrigin && url.substr(0, 7) == "http://") ||
+           (freeHeap >= MIN_TLS_FREE_HEAP && maxAlloc >= MIN_TLS_MAX_ALLOC);
+  }
 
   /**
    * Fetch text content from a URL with optional credentials.

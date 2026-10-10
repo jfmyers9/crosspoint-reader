@@ -29,6 +29,7 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
   WifiPowerSaveGuard psGuard;
   freeink::FetchOptions options;
   options.redirectToHttp = downgradeRedirectsToHttp;
+  bool blockedByHeap = false;
   const freeink::FetchResult result = freeink::fetchResumable(
       url, options,
       [&](freeink::SecureHttpClient& http, const bool sameOrigin) {
@@ -46,10 +47,17 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
         }
         LOG_DBG("HTTP", "wolfSSL GET: %s (heap %u, max block %u)", url.c_str(), (unsigned)ESP.getFreeHeap(),
                 (unsigned)ESP.getMaxAllocHeap());
+        // bytesOut identifies downloads; recheck redirects/retries before connecting.
+        blockedByHeap = bytesOut && !HttpDownloader::hasDownloadHeapHeadroom(url, ESP.getFreeHeap(),
+                                                                             ESP.getMaxAllocHeap(), sameOrigin);
       },
-      sink, [cancelFlag] { return cancelFlag && *cancelFlag; });
+      sink, [&] { return blockedByHeap || (cancelFlag && *cancelFlag); });
   if (bytesOut) *bytesOut = result.bytes;
 
+  if (blockedByHeap) {
+    LOG_ERR("HTTP", "Low heap for TLS or cross-origin download attempt");
+    return HttpDownloader::HTTP_ERROR;
+  }
   if (result.aborted) return HttpDownloader::ABORTED;
   if (result.stopped) return HttpDownloader::FILE_ERROR;
   if (result.status == 401 || result.status == 403) {

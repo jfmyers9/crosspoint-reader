@@ -174,14 +174,11 @@ HttpDownloader::DownloadError CatalogActivity::downloadFile(const std::string& u
   downloadProgress = downloadTotal = 0;
   lastRenderedPercent = -1;
   lastProgressUpdateMs = 0;
-  // Rebuildable SD-font caches can hold tens of KB the TLS session needs for
-  // a multi-MB file; release them up front (they repopulate on demand) and
-  // refuse to start below the floor. A doomed transfer otherwise dies
-  // mid-stream with MEMORY_E, or abort()s on an interior allocation.
+  // Reclaim rebuildable font caches before networking. Only TLS needs the
+  // record-buffer floor; plain HTTP downloads need no TLS record buffers.
   if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseSdFontCaches();
-  if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
-      ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
-    LOG_ERR("CAT", "Low heap for download (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  if (!HttpDownloader::hasDownloadHeapHeadroom(url, ESP.getFreeHeap(), ESP.getMaxAllocHeap())) {
+    LOG_ERR("CAT", "Low heap for TLS download (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     return HttpDownloader::HTTP_ERROR;
   }
   return HttpDownloader::downloadToFile(
