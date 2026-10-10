@@ -3,10 +3,10 @@
 #include <Arduino.h>
 #include <Logging.h>
 #include <Memory.h>
-#include <cctype>
 #include <ResumableFetch.h>
 
 #include <algorithm>
+#include <cctype>
 #include <functional>
 #include <string>
 
@@ -47,8 +47,6 @@ int g_lastStatus = 0;
 bool g_lastRedirected = false;
 
 #if defined(CROSSPOINT_ENABLE_TAILSCALE)
-constexpr int MAX_REDIRECTS = 5;
-
 bool isRedirect(int status) {
   return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
@@ -105,8 +103,10 @@ class HttpSinkStream final : public Stream {
 };
 
 HttpDownloader::DownloadError runGetMagicDns(const std::string& url, const std::string& username,
-                                             const std::string& password, const std::vector<HttpDownloader::Header>& headers,
-                                             const freeink::FetchSink& sink, const bool* cancelFlag, size_t* bytesOut) {
+                                             const std::string& password,
+                                             const std::vector<HttpDownloader::Header>& headers,
+                                             const freeink::FetchSink& sink, const bool* cancelFlag, size_t* bytesOut,
+                                             const HttpDownloader::FetchOptions* fetchOptions = nullptr) {
   if (url.compare(0, 7, "http://") != 0) {
     LOG_ERR("HTTP", "Tailnet MagicDNS currently requires plain HTTP: %s", url.c_str());
     return HttpDownloader::HTTP_ERROR;
@@ -130,7 +130,7 @@ HttpDownloader::DownloadError runGetMagicDns(const std::string& url, const std::
   int status = 0;
   for (int hop = 0;; ++hop) {
     http->setAuthorization("");
-    if (sendCredentials && !username.empty() && !password.empty()) {
+    if (sendCredentials && (!fetchOptions || fetchOptions->bearer.empty()) && !username.empty() && !password.empty()) {
       http->setAuthorization(username.c_str(), password.c_str());
     }
     if (!http->begin(*transport, activeUrl.c_str())) {
@@ -139,7 +139,16 @@ HttpDownloader::DownloadError runGetMagicDns(const std::string& url, const std::
     }
 
     if (sendCredentials) {
+      if (fetchOptions && !fetchOptions->bearer.empty()) {
+        http->addHeader("Authorization", ("Bearer " + fetchOptions->bearer).c_str());
+      }
       for (const auto& h : headers) http->addHeader(h.first.c_str(), h.second.c_str());
+    }
+    if (fetchOptions) {
+      if (!fetchOptions->accept.empty()) http->addHeader("Accept", fetchOptions->accept.c_str());
+      if (!fetchOptions->acceptLanguage.empty()) {
+        http->addHeader("Accept-Language", fetchOptions->acceptLanguage.c_str());
+      }
     }
     status = http->GET();
     g_lastStatus = status < 0 ? 0 : status;
@@ -167,12 +176,14 @@ HttpDownloader::DownloadError runGetMagicDns(const std::string& url, const std::
     activeUrl = std::move(nextUrl);
     http->end();
   }
-  if (status == 401 || status == 403) {
+  const bool captureUnauthorized = fetchOptions && fetchOptions->captureErrorBody && status == 401;
+  if ((status == 401 || status == 403) && !captureUnauthorized) {
     LOG_ERR("HTTP", "Tailnet request unauthorized: %d", status);
     http->end();
     return HttpDownloader::UNAUTHORIZED;
   }
-  if (status != HTTP_CODE_OK) {
+  const bool successful = fetchOptions ? status >= 200 && status < 300 : status == HTTP_CODE_OK;
+  if (!successful && !captureUnauthorized) {
     LOG_ERR("HTTP", "Tailnet request failed: %d", status);
     http->end();
     return HttpDownloader::HTTP_ERROR;
@@ -190,7 +201,7 @@ HttpDownloader::DownloadError runGetMagicDns(const std::string& url, const std::
     LOG_ERR("HTTP", "Incomplete tailnet response: got %zu of %zu bytes", output.downloaded, total);
     return HttpDownloader::HTTP_ERROR;
   }
-  return HttpDownloader::OK;
+  return captureUnauthorized ? HttpDownloader::UNAUTHORIZED : HttpDownloader::OK;
 }
 #endif
 
@@ -213,6 +224,7 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
   freeink::FetchOptions options;
   options.redirectToHttp = downgradeRedirectsToHttp;
   bool answeredBySameOrigin = true;
+  bool blockedByHeap = false;
   const freeink::FetchResult result = freeink::fetchResumable(
       url, options,
       [&](freeink::SecureHttpClient& http, const bool sameOrigin) {
@@ -226,13 +238,21 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
         }
         LOG_DBG("HTTP", "wolfSSL GET: %s (heap %u, max block %u)", url.c_str(), (unsigned)ESP.getFreeHeap(),
                 (unsigned)ESP.getMaxAllocHeap());
+        // File downloads recheck each attempt, including redirects and resumes.
+        // fetchUrl keeps its existing behavior; bytesOut identifies the file path.
+        blockedByHeap = bytesOut && !HttpDownloader::hasDownloadHeapHeadroom(url, ESP.getFreeHeap(),
+                                                                             ESP.getMaxAllocHeap(), sameOrigin);
       },
-      sink, [cancelFlag] { return cancelFlag && *cancelFlag; });
+      sink, [&] { return blockedByHeap || (cancelFlag && *cancelFlag); });
   if (bytesOut) *bytesOut = result.bytes;
   // FetchResult::status is -1 when no response arrived (bad URL, DNS, connect, TLS).
   g_lastStatus = result.status < 0 ? 0 : result.status;
   g_lastRedirected = !answeredBySameOrigin;
 
+  if (blockedByHeap) {
+    LOG_ERR("HTTP", "Low heap for TLS or cross-origin download attempt");
+    return HttpDownloader::HTTP_ERROR;
+  }
   if (result.aborted) return HttpDownloader::ABORTED;
   if (result.stopped) return HttpDownloader::FILE_ERROR;
   if (result.status == 401 || result.status == 403) {
@@ -272,6 +292,20 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData, const FetchOptions& options) {
+  g_lastStatus = 0;
+  g_lastRedirected = false;
+  if (options.statusOut) *options.statusOut = 0;
+#if defined(CROSSPOINT_ENABLE_TAILSCALE)
+  if (TAILSCALE.isMagicDnsUrl(url)) {
+    freeink::FetchSink sink;
+    sink.write = onData;
+    const auto result =
+        runGetMagicDns(url, options.username, options.password, options.headers, sink, nullptr, nullptr, &options);
+    if (options.statusOut) *options.statusOut = g_lastStatus;
+    return result == OK;
+  }
+  if (!TAILSCALE.prepareUrl(url)) return false;
+#endif
   // OPDS fetches need what fetchResumable withholds: the final HTTP status
   // and a 401 body (auth documents are served as 401 bodies). Direct GET with
   // a manual redirect loop; catalog feeds are small enough that Range resume
