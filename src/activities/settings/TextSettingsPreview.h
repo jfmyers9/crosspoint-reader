@@ -4,7 +4,7 @@
 #include <memory>
 #include <vector>
 
-#include "components/themes/BaseTheme.h"
+#include "components/themes/ThemeGeometry.h"
 
 class GfxRenderer;
 class TextBlock;

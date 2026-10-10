@@ -6,7 +6,8 @@
 
 class BookOrbitHighlightReader {
  public:
-  // A null visitor validates the whole file. Callers must preflight before performing uploads:
+  // Visit legacy bookmark highlights and anchored clippings, preferring legacy notes at shared anchors.
+  // A null visitor validates both stores. Callers must preflight before performing uploads:
   // a later corrupt entry can otherwise fail after earlier callbacks have run.
   static bool visit(const std::string& bookPath, bool (*visitor)(void*, const BookmarkEntry&), void* context);
 };

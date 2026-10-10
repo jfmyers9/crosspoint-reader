@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include "ThemeGeometry.h"
+
 class Bitmap;
 class GfxRenderer;
 struct RecentBook;
@@ -21,15 +23,6 @@ struct BitmapRef;
 struct ListItem;
 }  // namespace ui
 }  // namespace freeink
-
-struct Rect {
-  int x;
-  int y;
-  int width;
-  int height;
-
-  explicit Rect(int x = 0, int y = 0, int width = 0, int height = 0) : x(x), y(y), width(width), height(height) {}
-};
 
 struct ThemeMetrics {
   int batteryWidth;

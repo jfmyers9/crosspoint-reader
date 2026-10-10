@@ -9,6 +9,7 @@ target_include_directories(BookOrbitHighlightReaderTest PRIVATE
   stubs
   ${REPO_ROOT}/src
   ${REPO_ROOT}/lib/BookOrbit
+  ${REPO_ROOT}/lib/Memory
   ${REPO_ROOT}/lib/Utf8
   ${arduinojson_SOURCE_DIR}/src
 )
