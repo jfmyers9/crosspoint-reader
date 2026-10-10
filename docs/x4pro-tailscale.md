@@ -36,6 +36,14 @@ required.
 Erasing the reader's NVS removes its node identity and requires repeating
 enrollment.
 
+Handshake timestamps use an NVS-backed monotonic counter, not device uptime,
+so rebooting or correcting the clock does not trigger the peer's replay
+protection. Counter ranges are persisted before use; a storage failure prevents
+new handshakes rather than reusing timestamps. Keep this state with the node
+identity; do not erase only the `cpwgclock` NVS namespace.
+Older firmware that uses uptime timestamps cannot reliably reuse that identity
+after this build has connected, because its timestamps would move backwards.
+
 Configure the CrossPoint OPDS server with the BookOrbit host's fully qualified
 MagicDNS name:
 

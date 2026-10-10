@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -35,6 +36,13 @@ class HttpDownloader {
   static constexpr uint32_t MIN_TLS_MAX_ALLOC = 20000;
 
   using Header = std::pair<std::string, std::string>;
+
+  // Plain HTTP (including HTTP inside WireGuard) needs no TLS record buffers.
+  // Keep the TLS floor for all other URLs; this does not guarantee allocation
+  // success, so transports must still handle OOM normally.
+  static constexpr bool hasDownloadHeapHeadroom(std::string_view url, uint32_t freeHeap, uint32_t maxAlloc) {
+    return url.substr(0, 7) == "http://" || (freeHeap >= MIN_TLS_FREE_HEAP && maxAlloc >= MIN_TLS_MAX_ALLOC);
+  }
 
   /**
    * HTTP status of the last request, or 0 when it never got a response (DNS,
