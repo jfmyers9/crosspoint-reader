@@ -140,6 +140,8 @@ ProgressRange getPageProgressRange(const std::shared_ptr<Epub>& epub, const int 
 
 bool bookmarkMatchesProgress(const BookmarkEntry& bookmark, const int spineIndex, const int page, const int pageCount,
                              const ProgressRange& pageRange) {
+  // Legacy highlights remain in the bookmark file; a page toggle must not delete them.
+  if (bookmark.isHighlight()) return false;
   if (bookmark.computedSpineIndex == spineIndex && bookmark.computedChapterPageCount == pageCount &&
       bookmark.computedChapterProgress == page) {
     return true;
@@ -2356,13 +2358,16 @@ int EpubReaderActivity::clippingAtPoint(const Page& page, const int x, const int
 
 void EpubReaderActivity::drawClippingHighlights(const Page& page, const int fontId, const int orientedMarginTop,
                                                 const int orientedMarginLeft) const {
-  if (!section || !CLIPPINGS.hasClippings() || section->currentPage < 0 || section->currentPage >= section->pageCount) {
+  if (!section || section->currentPage < 0 || section->currentPage >= section->pageCount) {
     return;
   }
 
   size_t chapterClippings = 0;
   for (size_t i = 0; i < CLIPPINGS.clippingCount(); ++i) {
     if (CLIPPINGS.clippingAt(i)->spineIndex == currentSpineIndex) ++chapterClippings;
+  }
+  for (const auto& bookmark : cachedBookmarks) {
+    if (bookmark.isHighlight() && bookmark.computedSpineIndex == currentSpineIndex) ++chapterClippings;
   }
   if (!chapterClippings) return;
 
@@ -2378,6 +2383,14 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
       if (clippingContainsWord(clipping, static_cast<uint16_t>(currentSpineIndex), currentPage, section->pageCount,
                                layoutSignature, wordIndex, range.start, range.end))
         return true;
+    }
+    // Render old bookmark highlights through the upstream renderer without migrating storage.
+    if (range.start != UINT32_MAX && range.end != UINT32_MAX && range.end > range.start) {
+      for (const auto& bookmark : cachedBookmarks) {
+        if (bookmark.isHighlight() && bookmark.computedSpineIndex == currentSpineIndex &&
+            range.end > bookmark.visibleTextOffset && range.start < bookmark.highlightEndOffset)
+          return true;
+      }
     }
     return false;
   };

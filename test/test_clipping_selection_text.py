@@ -51,6 +51,7 @@ harness = r"""
 #define LOG_DBG(module, ...) (void)std::snprintf(nullptr, 0, __VA_ARGS__)
 #include "clippings/ClippingText.h"
 #include "ClippingStore.h"
+#include "BookmarkEntry.h"
 #include <Epub/ReaderRenderSpec.h>
 namespace BidiUtils { enum class BidiBaseDir : int8_t { AUTO = -1, LTR = 0, RTL = 1 }; }
 struct EpdFontFamily { enum Style { REGULAR, UNDERLINE = 4 }; };
@@ -172,8 +173,9 @@ struct Settings {
 } SETTINGS;
 struct SavedClippings {
   Clipping clipping;
-  bool hasClippings() const { return true; }
-  size_t clippingCount() const { return 1; }
+  bool present = true;
+  bool hasClippings() const { return present; }
+  size_t clippingCount() const { return present ? 1 : 0; }
   const Clipping* clippingAt(size_t) const { return &clipping; }
 } savedClippings;
 #undef CLIPPINGS
@@ -216,6 +218,7 @@ struct ClipSelectionActivity {
 """ + build_text + extract_words + clean_draw + highlight_draw + selection_draw + r"""
 struct EpubReaderActivity {
   Renderer& renderer;
+  std::vector<BookmarkEntry> cachedBookmarks;
   explicit EpubReaderActivity(Renderer& renderer) : renderer(renderer) {}
   struct Section { int currentPage = 0, pageCount = 1; } sectionData;
   Section* section = &sectionData;
@@ -344,6 +347,26 @@ int main() {
     assert(activity.renderer.fills[0].width == width);
     assert(reader.clippingAtPoint(*activity.pages[0], width - 1, 8) == 0);
     assert(reader.clippingAtPoint(*activity.pages[0], width, 8) == -1);
+    // Legacy anchors share upstream rendering, even with no binary clippings.
+    savedClippings.present = false;
+    BookmarkEntry legacy{};
+    legacy.hasVisibleTextOffset = true;
+    legacy.visibleTextOffset = 0;
+    legacy.highlightEndOffset = 3;
+    reader.cachedBookmarks.push_back(legacy);
+    activity.renderer.fills.clear();
+    reader.drawClippingHighlights(*activity.pages[0], 0, 0, 0);
+    assert(activity.renderer.fills.size() == 1);
+    assert(activity.renderer.fills[0].width == width);
+    reader.cachedBookmarks[0].computedSpineIndex = 1;
+    activity.renderer.fills.clear();
+    reader.drawClippingHighlights(*activity.pages[0], 0, 0, 0);
+    assert(activity.renderer.fills.empty());
+    reader.cachedBookmarks[0].computedSpineIndex = 0;
+    activity.pages[0]->elements[0]->block.range = {UINT32_MAX, UINT32_MAX};
+    reader.drawClippingHighlights(*activity.pages[0], 0, 0, 0);
+    assert(activity.renderer.fills.empty());
+    savedClippings.present = true;
   }
   for (const auto& logical : {std::vector<std::string>{"אחד", "alpha", "beta", "שני"},
                               std::vector<std::string>{"واحد", "alpha", "beta", "اثنان"}}) {

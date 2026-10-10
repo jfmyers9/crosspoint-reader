@@ -1,8 +1,12 @@
 #include "BookOrbitHighlightReader.h"
 
 #include <ArduinoJson.h>
+#include <ClippingStore.h>
 #include <HalStorage.h>
+#include <Logging.h>
+#include <Memory.h>
 
+#include <bitset>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -267,10 +271,7 @@ bool visitEntry(Input& input, bool (*visitor)(void*, const BookmarkEntry&), void
     return false;
   return visitHighlight(doc.as<JsonObjectConst>(), visitor, context);
 }
-}  // namespace
-
-bool BookOrbitHighlightReader::visit(const std::string& bookPath, bool (*visitor)(void*, const BookmarkEntry&),
-                                     void* context) {
+bool visitLegacy(const std::string& bookPath, bool (*visitor)(void*, const BookmarkEntry&), void* context) {
   std::string path = BookmarkUtil::getBookmarkPath(bookPath);
   if (!Storage.exists(path.c_str())) {
     path += ".bak";
@@ -299,4 +300,76 @@ bool BookOrbitHighlightReader::visit(const std::string& bookPath, bool (*visitor
     }
   }
   return input.token() == '}' && input.token() == -1 && !input.failed;
+}
+
+bool sameAnchor(const Clipping& first, const Clipping& second) {
+  return first.spineIndex == second.spineIndex && first.startOffset == second.startOffset &&
+         first.endOffset == second.endOffset;
+}
+
+struct LegacyContext {
+  const ClippingStore& store;
+  bool (*visitor)(void*, const BookmarkEntry&);
+  void* context;
+  std::bitset<CLIPPING_MAX_PER_BOOK> duplicates;
+
+  static bool visit(void* data, const BookmarkEntry& entry) {
+    auto& self = *static_cast<LegacyContext*>(data);
+    for (size_t i = 0; i < self.store.clippingCount(); ++i) {
+      const auto* clipping = self.store.clippingAt(i);
+      if (!clipping) return false;
+      if (clipping->spineIndex == entry.computedSpineIndex && clipping->startOffset == entry.visibleTextOffset &&
+          clipping->endOffset == entry.highlightEndOffset) {
+        self.duplicates.set(i);
+      }
+    }
+    return !self.visitor || self.visitor(self.context, entry);
+  }
+};
+}  // namespace
+
+bool BookOrbitHighlightReader::visit(const std::string& bookPath, bool (*visitor)(void*, const BookmarkEntry&),
+                                     void* context) {
+  // The bounded index can exceed the task stack budget on S3; never replace the reader's global store.
+  auto store = makeUniqueNoThrow<ClippingStore>();
+  if (!store) {
+    LOG_ERR("BOHL", "OOM: clipping store");
+    return false;
+  }
+  if (!store->loadForBook(bookPath, "", "", "epub") || store->clippingCount() > CLIPPING_MAX_PER_BOOK) {
+    LOG_ERR("BOHL", "Cannot load clipping store");
+    return false;
+  }
+  LegacyContext legacy{*store, visitor, context, {}};
+  // Legacy anchors win, preserving their user notes and existing export identities.
+  if (!visitLegacy(bookPath, LegacyContext::visit, &legacy)) return false;
+
+  BookmarkEntry entry{};
+  for (size_t i = 0; i < store->clippingCount(); ++i) {
+    const auto* clipping = store->clippingAt(i);
+    if (!clipping || clipping->startOffset == UINT32_MAX || clipping->endOffset == UINT32_MAX ||
+        clipping->startOffset >= clipping->endOffset || clipping->textLength == 0 ||
+        clipping->textLength > BookmarkEntry::MAX_HIGHLIGHT_QUOTE_LENGTH) {
+      LOG_ERR("BOHL", "Unsupported clipping anchor or quote length");
+      return false;
+    }
+    // Validate even suppressed duplicates, on both preflight and upload passes.
+    if (!store->readClippingText(i, entry.summary) || entry.summary.size() != clipping->textLength ||
+        entry.summary.find('\0') != std::string::npos) {
+      LOG_ERR("BOHL", "Cannot read clipping quote");
+      return false;
+    }
+    if (legacy.duplicates.test(i)) continue;
+    for (size_t j = i + 1; j < store->clippingCount(); ++j) {
+      const auto* other = store->clippingAt(j);
+      if (!other) return false;
+      if (sameAnchor(*clipping, *other)) legacy.duplicates.set(j);
+    }
+    entry.computedSpineIndex = clipping->spineIndex;
+    entry.hasVisibleTextOffset = true;
+    entry.visibleTextOffset = clipping->startOffset;
+    entry.highlightEndOffset = clipping->endOffset;
+    if (visitor && !visitor(context, entry)) return false;
+  }
+  return true;
 }
