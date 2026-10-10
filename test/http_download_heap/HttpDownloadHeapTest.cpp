@@ -33,4 +33,14 @@ TEST(HttpDownloadHeap, OnlyAnExplicitHttpSchemeBypassesTlsFloor) {
     EXPECT_FALSE(HttpDownloader::hasDownloadHeapHeadroom(url, 16000, 8000));
   }
 }
+
+TEST(HttpDownloadHeap, RedirectToAnotherOriginRequiresTlsHeadroom) {
+  constexpr auto* url = "http://books.example/book.epub";
+  // A same-origin HTTP retry remains safe; a changed origin may have upgraded to HTTPS.
+  EXPECT_TRUE(HttpDownloader::hasDownloadHeapHeadroom(url, 16000, 8000, true));
+  EXPECT_FALSE(HttpDownloader::hasDownloadHeapHeadroom(url, 16000, 8000, false));
+  EXPECT_FALSE(HttpDownloader::hasDownloadHeapHeadroom(url, FREE_FLOOR - 1, BLOCK_FLOOR, false));
+  EXPECT_FALSE(HttpDownloader::hasDownloadHeapHeadroom(url, FREE_FLOOR, BLOCK_FLOOR - 1, false));
+  EXPECT_TRUE(HttpDownloader::hasDownloadHeapHeadroom(url, FREE_FLOOR, BLOCK_FLOOR, false));
+}
 }  // namespace
