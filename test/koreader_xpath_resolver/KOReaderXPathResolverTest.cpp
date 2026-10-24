@@ -292,21 +292,112 @@ TEST(KOReaderXPathResolver, StrictRangeKeepsMarkupTextNodeBoundaries) {
   }
 }
 
-TEST(KOReaderXPathResolver, StrictRangeRejectsCssDependentWhitespaceCoordinates) {
+TEST(KOReaderXPathResolver, StrictRangeAcceptsWhitespaceChangesAfterBothEndpoints) {
   std::string first, last;
-  for (const auto* content : {"ab  cd", "ab\ncd", " abcd", "abcd ", " \n<em>x</em>abcd"}) {
+  for (const auto* suffix : {" ", "  ", "\n", "\t", "  cd", "\ncd", " \n\t", " <em>tail</em>"}) {
+    SCOPED_TRACE(suffix);
+    ASSERT_TRUE(ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(
+        epubWith(std::string("<html><body><p>abcd") + suffix + "</p></body></html>"), 0, 0, 2, first, last, "ab"));
+    EXPECT_EQ(first, "/body/DocFragment[1]/body/p[1]/text()[1].0");
+    EXPECT_EQ(last, "/body/DocFragment[1]/body/p[1]/text()[1].2");
+  }
+}
+
+TEST(KOReaderXPathResolver, StrictRangeAcceptsCompleteTextBeforeTrailingWhitespace) {
+  std::string first, last;
+  for (const auto* suffix : {" ", "  ", "\n", "\t", " \n\t"}) {
+    ASSERT_TRUE(ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(
+        epubWith(std::string("<html><body><p>ab cd") + suffix + "</p></body></html>"), 0, 0, 5, first, last, "ab cd"));
+    EXPECT_EQ(last, "/body/DocFragment[1]/body/p[1]/text()[1].5");
+  }
+}
+
+TEST(KOReaderXPathResolver, StrictRangeRejectsWhitespaceChangesBeforeEitherEndpoint) {
+  struct Range {
+    const char* content;
+    uint32_t start;
+    uint32_t end;
+  };
+  for (const auto& range :
+       {Range{"ab  cd", 4, 6}, Range{"ab\ncd", 3, 5}, Range{" abcd", 1, 3}, Range{"ab  cd", 0, 5}, Range{"abcd ", 0, 5},
+        Range{"abcd  ", 4, 5}, Range{"abcd\n", 0, 5}, Range{"abcd\t", 4, 5}}) {
+    SCOPED_TRACE(range.content);
+    std::string first = "stale", last = "stale";
     EXPECT_FALSE(ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(
-        epubWith(std::string("<html><body><p>") + content + "</p></body></html>"), 0, 0, 2, first, last));
+        epubWith(std::string("<html><body><p>") + range.content + "</p></body></html>"), 0, range.start, range.end,
+        first, last));
     EXPECT_TRUE(first.empty());
     EXPECT_TRUE(last.empty());
   }
-  // The preceding whitespace-only node may be absent from CRengine's DOM.
+}
+
+TEST(KOReaderXPathResolver, StrictRangeKeepsUncertainTextNodeIndicesRejected) {
+  std::string first, last;
   EXPECT_FALSE(ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(
       epubWith("<html><body><p> <em>x</em>abcd</p></body></html>"), 0, 2, 4, first, last));
-  ASSERT_TRUE(ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(
-      epubWith("<html><body><p>ab cd</p></body></html>"), 0, 3, 5, first, last));
-  EXPECT_EQ(first, "/body/DocFragment[1]/body/p[1]/text()[1].3");
-  EXPECT_EQ(last, "/body/DocFragment[1]/body/p[1]/text()[1].5");
+  EXPECT_TRUE(first.empty());
+  EXPECT_TRUE(last.empty());
+}
+
+TEST(KOReaderXPathResolver, StrictRangeValidatesInlineEndpointsIndependently) {
+  const auto epub = epubWith("<html><body><p>ab<em>cd  </em>ef  </p></body></html>");
+  std::string first, last;
+  ASSERT_TRUE(ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(epub, 0, 0, 4, first, last, "abcd"));
+  EXPECT_EQ(first, "/body/DocFragment[1]/body/p[1]/text()[1].0");
+  EXPECT_EQ(last, "/body/DocFragment[1]/body/p[1]/em[1]/text()[1].2");
+  ASSERT_TRUE(ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(epub, 0, 6, 8, first, last, "ef"));
+  EXPECT_EQ(first, "/body/DocFragment[1]/body/p[1]/text()[2].0");
+  EXPECT_EQ(last, "/body/DocFragment[1]/body/p[1]/text()[2].2");
+}
+
+TEST(KOReaderXPathResolver, StrictRangeAcceptsLaterTextAfterAnInternalSingleSpace) {
+  const auto epub = epubWith("<html><body><p>ab cd  </p></body></html>");
+  std::string first, last;
+  ASSERT_TRUE(ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(epub, 0, 0, 3, first, last, "ab "));
+  EXPECT_EQ(last, "/body/DocFragment[1]/body/p[1]/text()[1].3");
+  EXPECT_FALSE(ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(epub, 0, 0, 6, first, last, "ab cd "));
+}
+
+TEST(KOReaderXPathResolver, StrictRangeAcceptsLongParagraphWithTrailingSpace) {
+  const std::string prefix(2845, 'x');
+  const std::string quote = "selected quote";
+  const auto epub = epubWith("<html><body><p>" + prefix + quote + std::string(512, 'y') + " </p></body></html>");
+  std::string first, last;
+  ASSERT_TRUE(ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(epub, 0, 2845, 2859, first, last, quote));
+  EXPECT_EQ(first, "/body/DocFragment[1]/body/p[1]/text()[1].2845");
+  EXPECT_EQ(last, "/body/DocFragment[1]/body/p[1]/text()[1].2859");
+}
+
+TEST(KOReaderXPathResolver, StrictRangePrefixSafetySurvivesStreamAndEntityBoundaries) {
+  for (const size_t padding : {990u, 1000u, 1010u, 1020u, 1030u}) {
+    SCOPED_TRACE(padding);
+    const std::string prefix(padding, 'x');
+    const auto epub = epubWith("<html><body><p>" + prefix + "😀&amp;éZ  \n\t</p></body></html>");
+    std::string first, last;
+    ASSERT_TRUE(
+        ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(epub, 0, padding, padding + 4, first, last, "😀&éZ"));
+    const std::string path = "/body/DocFragment[1]/body/p[1]/text()[1].";
+    EXPECT_EQ(first, path + std::to_string(padding));
+    EXPECT_EQ(last, path + std::to_string(padding + 4));
+  }
+}
+
+TEST(KOReaderXPathResolver, StrictRangeSafePrefixStillRequiresValidDocumentAndQuote) {
+  for (const auto* document :
+       {"<html><body><p>abcd </p><broken></body></html>", "<html><body><p>abcd </p>",
+        "<html><body><p>abcd &nbsp;</p></body></html>", "<html><body><p>abcd </p></body></html>junk"}) {
+    SCOPED_TRACE(document);
+    std::string first = "stale", last = "stale";
+    EXPECT_FALSE(
+        ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(epubWith(document), 0, 0, 2, first, last, "ab"));
+    EXPECT_TRUE(first.empty());
+    EXPECT_TRUE(last.empty());
+  }
+  std::string first = "stale", last = "stale";
+  EXPECT_FALSE(ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(
+      epubWith("<html><body><p>abcd </p></body></html>"), 0, 0, 2, first, last, "ac"));
+  EXPECT_TRUE(first.empty());
+  EXPECT_TRUE(last.empty());
 }
 
 TEST(KOReaderXPathResolver, StrictRangeChecksQuoteToRejectStaleOffsets) {

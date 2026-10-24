@@ -584,9 +584,10 @@ class XPathProgressResolver final : public Print {
       }
       textNodeStartChars = visibleChars;
       textNodeCodepoints = 0;
-      nodeHasNonSpace = false;
       nodeLastSpace = false;
       nodeAmbiguousWhitespace = false;
+      nodeStablePrefixCodepoints = 0;
+      nodeNonSpaceEndCodepoints = 0;
       nodeHasEndpoint = false;
       pendingTextNode = false;
     }
@@ -608,11 +609,12 @@ class XPathProgressResolver final : public Print {
         }
         const bool space = cp == ' ' || cp == '\n' || cp == '\r' || cp == '\t';
         if (space && (textNodeCodepoints == 0 || nodeLastSpace || cp != ' ')) nodeAmbiguousWhitespace = true;
-        nodeHasNonSpace |= !space;
         nodeLastSpace = space;
         // CRengine's ldomXPointer indexes lString32 text, including non-BMP characters.
         ++textNodeCodepoints;
         ++visibleChars;
+        if (!nodeAmbiguousWhitespace) nodeStablePrefixCodepoints = textNodeCodepoints;
+        if (!space) nodeNonSpaceEndCodepoints = textNodeCodepoints;
         if (xpath.empty() && boundaryMode == BoundaryMode::Inclusive && targetVisibleChar == visibleChars) {
           xpath = buildParagraphXPath(spineIndex, path, textNodeIndexStack.back().index, textNodeCodepoints);
           nodeHasEndpoint = true;
@@ -652,12 +654,18 @@ class XPathProgressResolver final : public Print {
   void finishStrictTextNode() {
     if (!strictRange || pendingTextNode || !insideBody || nonVisibleDepth > 0 || textNodeIndexStack.empty()) return;
     auto& node = textNodeIndexStack.back();
-    // CRengine may collapse/trim whitespace or omit whitespace-only nodes depending
-    // on CSS. Without that DOM, reject ambiguous endpoints rather than export drift.
-    if (nodeHasEndpoint && (node.uncertainIndex || nodeAmbiguousWhitespace || nodeLastSpace || !nodeHasNonSpace)) {
-      parseOk = false;
+    // Normalization after an endpoint cannot shift its offset. Its prefix must
+    // stay unchanged, and the endpoint must not be inside a trimmable suffix.
+    if (nodeHasEndpoint) {
+      const size_t endpointCodepoints = targetVisibleChar - textNodeStartChars;
+      if (node.uncertainIndex || nodeNonSpaceEndCodepoints == 0 || endpointCodepoints > nodeStablePrefixCodepoints ||
+          endpointCodepoints > nodeNonSpaceEndCodepoints) {
+        LOG_ERR("KOX", "Highlight endpoint depends on whitespace normalization: spine=%d offset=%zu", spineIndex,
+                targetVisibleChar);
+        parseOk = false;
+      }
     }
-    if (!nodeHasNonSpace) node.uncertainIndex = true;
+    if (nodeNonSpaceEndCodepoints == 0) node.uncertainIndex = true;
     pendingTextNode = true;
   }
 
@@ -705,7 +713,8 @@ class XPathProgressResolver final : public Print {
     int index = 0;
     bool uncertainIndex = false;
   };
-  bool nodeHasNonSpace = false;
+  size_t nodeStablePrefixCodepoints = 0;
+  size_t nodeNonSpaceEndCodepoints = 0;
   bool nodeLastSpace = false;
   bool nodeAmbiguousWhitespace = false;
   bool nodeHasEndpoint = false;
@@ -804,8 +813,14 @@ bool ChapterXPathResolver::findXPathRangeForVisibleTextOffsets(const std::shared
       resolver.verifyQuote(start, end, normalizedQuote);
     }
     if (!resolver.ok() || !epub->readItemContentsToStream(href, resolver, 1024) || !resolver.finish() ||
-        !resolver.hasMatch() || !resolver.quoteMatches())
+        !resolver.hasMatch()) {
+      LOG_ERR("KOX", "Cannot resolve highlight endpoint: spine=%d offset=%u", spineIndex, offset);
       return false;
+    }
+    if (!resolver.quoteMatches()) {
+      LOG_ERR("KOX", "Highlight quote does not match source: spine=%d start=%u end=%u", spineIndex, start, end);
+      return false;
+    }
     result = resolver.getXPath();
     return true;
   };
