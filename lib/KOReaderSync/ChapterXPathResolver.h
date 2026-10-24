@@ -41,6 +41,8 @@ class ChapterXPathResolver {
   // malformed/unresolvable content returns false and clears both outputs.
   // A nonempty expectedQuote verifies the selected source text (ASCII whitespace
   // collapsed/trimmed, otherwise byte-exact). Quotes/range text over 2048 bytes fail.
+  // Endpoint prefixes must have CSS-independent coordinates; whitespace after an
+  // endpoint is allowed unless the endpoint itself lies in a trimmable suffix.
   static bool findXPathRangeForVisibleTextOffsets(const std::shared_ptr<Epub>& epub, int spineIndex, uint32_t start,
                                                   uint32_t end, std::string& pos0, std::string& pos1,
                                                   const std::string& expectedQuote = {});
