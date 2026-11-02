@@ -34,7 +34,7 @@ class BookOrbitHighlightReaderTest : public testing::Test {
     result.text = text;
     return result;
   }
-  static bool collect(void* context, const BookmarkEntry& entry) {
+  static bool collect(void* context, const BookmarkEntry& entry, const char*) {
     static_cast<std::vector<BookmarkEntry>*>(context)->push_back(entry);
     return true;
   }
@@ -44,7 +44,7 @@ class BookOrbitHighlightReaderTest : public testing::Test {
     return BookOrbitHighlightReader::visit(BOOK, collect, &entries);
   }
 };
-bool count(void* context, const BookmarkEntry& entry) {
+bool count(void* context, const BookmarkEntry& entry, const char*) {
   ++*static_cast<unsigned*>(context);
   EXPECT_TRUE(entry.isHighlight());
   EXPECT_EQ(entry.computedSpineIndex, 2);
@@ -92,7 +92,7 @@ TEST_F(BookOrbitHighlightReaderTest, CallbackCanAbortWithoutReadingRest) {
   unsigned seen = 0;
   EXPECT_FALSE(BookOrbitHighlightReader::visit(
       BOOK,
-      [](void* p, const BookmarkEntry&) {
+      [](void* p, const BookmarkEntry&, const char*) {
         ++*static_cast<unsigned*>(p);
         return false;
       },
@@ -192,6 +192,87 @@ TEST_F(BookOrbitHighlightReaderTest, MapsOnlyCurrentBooksPersistedClippingsWitho
   EXPECT_FALSE(ClippingStore::books[BOOK][0].clipping.pendingUpload);
   EXPECT_EQ(ClippingStore::books[BOOK][0].clipping.syncRevision, 42u);
   EXPECT_STREQ(ClippingStore::books[BOOK][0].clipping.id, "upstream-id");
+}
+
+TEST_F(BookOrbitHighlightReaderTest, PassesSavedChapterSeparatelyFromNote) {
+  auto item = clip();
+  std::strcpy(item.clipping.chapterTitle, "Chapter two");
+  ClippingStore::books[BOOK] = {item, clip(2, 20, 25)};
+  std::vector<std::string> chapters;
+  EXPECT_TRUE(BookOrbitHighlightReader::visit(
+      BOOK,
+      [](void* context, const BookmarkEntry& entry, const char* chapter) {
+        EXPECT_TRUE(entry.name.empty());
+        static_cast<std::vector<std::string>*>(context)->emplace_back(chapter);
+        return true;
+      },
+      &chapters));
+  EXPECT_EQ(chapters, (std::vector<std::string>{"Chapter two", ""}));
+}
+
+TEST_F(BookOrbitHighlightReaderTest, PreservesLegacySavedChapterPageMetadata) {
+  for (const auto page : {0, 8}) {
+    set(wrap(std::string(HIGHLIGHT).substr(0, std::strlen(HIGHLIGHT) - 1) + ",\"pc\":9,\"pp\":" + std::to_string(page) +
+             "}"));
+    std::vector<BookmarkEntry> entries;
+    ASSERT_TRUE(visit(entries));
+    ASSERT_EQ(entries.size(), 1u);
+    EXPECT_EQ(entries[0].computedChapterPageCount, 9);
+    EXPECT_EQ(entries[0].computedChapterProgress, page);
+  }
+}
+
+TEST_F(BookOrbitHighlightReaderTest, MissingOrInvalidLegacyPageMetadataStaysUnknown) {
+  for (const auto* fields :
+       {"", ",\"pc\":9", ",\"pp\":0", ",\"pc\":0,\"pp\":0", ",\"pc\":9,\"pp\":9", ",\"pc\":9,\"pp\":-1",
+        ",\"pc\":9,\"pp\":0.5", ",\"pc\":9,\"pp\":\"0\"", ",\"pc\":65536,\"pp\":0", ",\"pc\":null,\"pp\":0"}) {
+    set(wrap(std::string(HIGHLIGHT).substr(0, std::strlen(HIGHLIGHT) - 1) + fields + "}"));
+    std::vector<BookmarkEntry> entries;
+    ASSERT_TRUE(visit(entries)) << fields;
+    ASSERT_EQ(entries.size(), 1u);
+    EXPECT_EQ(entries[0].computedChapterPageCount, 0) << fields;
+    EXPECT_EQ(entries[0].computedChapterProgress, 0) << fields;
+  }
+}
+
+TEST_F(BookOrbitHighlightReaderTest, UsesClippingStartPageAndResetsMetadataBetweenEntries) {
+  auto first = clip();
+  first.clipping.startPage = 7;
+  first.clipping.endPage = 9;
+  first.clipping.pageCount = 10;
+  auto second = clip(2, 20, 25);
+  second.clipping.pageCount = 0;
+  ClippingStore::books[BOOK] = {first, second};
+  std::vector<BookmarkEntry> entries;
+  ASSERT_TRUE(visit(entries));
+  ASSERT_EQ(entries.size(), 2u);
+  EXPECT_EQ(entries[0].computedChapterProgress, 7);
+  EXPECT_EQ(entries[0].computedChapterPageCount, 10);
+  EXPECT_EQ(entries[1].computedChapterProgress, 0);
+  EXPECT_EQ(entries[1].computedChapterPageCount, 0);
+}
+
+TEST_F(BookOrbitHighlightReaderTest, DuplicateClippingDoesNotReplaceLegacyPageMetadata) {
+  set(wrap(std::string(HIGHLIGHT).substr(0, std::strlen(HIGHLIGHT) - 1) + ",\"pc\":9,\"pp\":2}"));
+  auto item = clip();
+  item.clipping.startPage = 7;
+  item.clipping.pageCount = 10;
+  ClippingStore::books[BOOK] = {item};
+  std::vector<BookmarkEntry> entries;
+  ASSERT_TRUE(visit(entries));
+  ASSERT_EQ(entries.size(), 1u);
+  EXPECT_EQ(entries[0].computedChapterProgress, 2);
+  EXPECT_EQ(entries[0].computedChapterPageCount, 9);
+}
+
+TEST_F(BookOrbitHighlightReaderTest, RejectsUnterminatedChapterTitleOnBothPasses) {
+  auto item = clip();
+  std::memset(item.clipping.chapterTitle, 'x', sizeof(item.clipping.chapterTitle));
+  ClippingStore::books[BOOK] = {item};
+  EXPECT_FALSE(validate());
+  std::vector<BookmarkEntry> entries;
+  EXPECT_FALSE(visit(entries));
+  EXPECT_TRUE(entries.empty());
 }
 
 TEST_F(BookOrbitHighlightReaderTest, LegacyAnchorWinsAndPreservesItsNote) {
@@ -299,7 +380,7 @@ TEST_F(BookOrbitHighlightReaderTest, BinaryCallbackCanAbortAndReleasesLocalStore
   unsigned seen = 0;
   EXPECT_FALSE(BookOrbitHighlightReader::visit(
       BOOK,
-      [](void* context, const BookmarkEntry&) {
+      [](void* context, const BookmarkEntry&, const char*) {
         ++*static_cast<unsigned*>(context);
         return false;
       },

@@ -9,6 +9,7 @@
 #include <KOReaderDocumentId.h>
 #include <Logging.h>
 #include <MD5Builder.h>
+#include <Utf8.h>
 #include <esp_timer.h>
 
 #include <algorithm>
@@ -145,15 +146,20 @@ struct SyncContext {
   size_t requests = 0;
   BookOrbitAnnotations::Result result = BookOrbitAnnotations::Result::Complete;
 
-  static bool upload(void* data, const BookmarkEntry& entry) {
+  static bool upload(void* data, const BookmarkEntry& entry, const char* savedChapter) {
     auto& self = *static_cast<SyncContext*>(data);
     char anchor[64];
     snprintf(anchor, sizeof(anchor), "%u:%u:%u", static_cast<unsigned>(entry.computedSpineIndex),
              static_cast<unsigned>(entry.visibleTextOffset), static_cast<unsigned>(entry.highlightEndOffset));
     const std::string path = self.folder + "/" + digest(anchor) + ".state";
+    // Saved pages are zero-based within a spine, not whole-book or KOReader pages.
+    const uint32_t pageNumber = entry.computedChapterProgress < entry.computedChapterPageCount
+                                    ? static_cast<uint32_t>(entry.computedChapterProgress) + 1
+                                    : 0;
     // Length-prefix mutable fields so embedded delimiters cannot alias revisions.
-    const std::string revision = digest(std::string("1:") + anchor + ":" + std::to_string(entry.summary.size()) + ":" +
-                                        entry.summary + ":" + entry.name);
+    const std::string revision = digest(std::string("2:") + anchor + ":" + std::to_string(entry.summary.size()) + ":" +
+                                        entry.summary + ":" + std::to_string(entry.name.size()) + ":" + entry.name +
+                                        ":" + std::to_string(pageNumber) + ":" + savedChapter);
     ExportState state;
     if (!state.load(path)) {
       self.result = BookOrbitAnnotations::Result::Failed;
@@ -166,7 +172,8 @@ struct SyncContext {
       return false;
     }
 
-    std::string start, end;
+    // Keep one display title through the request, bounded to 500 UTF-8 bytes below.
+    std::string start, end, chapter(savedChapter);
     {
       // Metadata and parser allocations exist only during conversion and are
       // released before the HTTP/TLS request. Never hold the whole bookmark list.
@@ -182,7 +189,12 @@ struct SyncContext {
         self.result = BookOrbitAnnotations::Result::Failed;
         return true;  // Unsupported positions stay local; other highlights can still export.
       }
+      if (chapter.empty()) {
+        const int tocIndex = epub->getTocIndexForSpineIndex(entry.computedSpineIndex);
+        if (tocIndex >= 0) chapter = epub->getTocItem(tocIndex).title;
+      }
     }
+    chapter.resize(utf8SafeTruncateBuffer(chapter.c_str(), static_cast<int>(std::min(chapter.size(), size_t{500}))));
     if (state.pending != revision) {
       if (!nextTimestamp(self.folder, state.updated)) return false;
       if (state.created == 0) state.created = state.updated;
@@ -193,7 +205,7 @@ struct SyncContext {
     if (!formatTimestamp(state.created, created) || !formatTimestamp(state.updated, updated)) return false;
     ++self.requests;
     if (!BookOrbitAnnotationsClient::upload(self.bookHash.c_str(), created, updated, start.c_str(), end.c_str(),
-                                            entry.summary.c_str(), entry.name.c_str())) {
+                                            entry.summary.c_str(), entry.name.c_str(), chapter.c_str(), pageNumber)) {
       if (BookOrbitAnnotationsClient::lastUploadWasUnmatched()) self.result = BookOrbitAnnotations::Result::Unmatched;
       return false;
     }
@@ -211,7 +223,7 @@ BookOrbitAnnotations::Result BookOrbitAnnotations::sync(const std::string& bookP
   size_t highlights = 0;
   if (!BookOrbitHighlightReader::visit(
           bookPath,
-          [](void* count, const BookmarkEntry&) {
+          [](void* count, const BookmarkEntry&, const char*) {
             ++*static_cast<size_t*>(count);
             return true;
           },
