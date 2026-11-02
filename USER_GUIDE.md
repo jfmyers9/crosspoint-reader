@@ -696,6 +696,16 @@ No BookOrbit server changes are required.
   once, preferring the legacy highlight so its label remains the BookOrbit note.
   New clippings have no note; chapter titles are not exported as user notes.
 - Quotes become underlined annotations; a legacy highlight's label becomes its note.
+- Chapter titles are exported separately from notes. Clippings use their saved
+  title; legacy highlights use the EPUB's table-of-contents title for their spine.
+  Missing titles are omitted.
+- Page numbers are **one-based within the saved chapter**, not whole-book,
+  print, or KOReader page numbers. Multi-page highlights use their starting page.
+  Numbers reflect the layout when the highlight was saved, not later font or
+  orientation changes. Missing or out-of-range saved pages are omitted.
+  After upgrading, sync again to add chapter and page metadata to previously
+  exported highlights without changing their export identity; repeat sync if
+  more than 32 highlights need updating.
 - This is **one-way, additive export**, not two-way synchronization. Renaming a
   local highlight updates its exported note, but deleting one locally does not
   delete it in BookOrbit. Remote edits/deletions are not applied to the reader.

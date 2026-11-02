@@ -234,7 +234,7 @@ class EntryInput {
   }
 };
 
-bool visitHighlight(JsonObjectConst obj, bool (*visitor)(void*, const BookmarkEntry&), void* context) {
+bool visitHighlight(JsonObjectConst obj, BookOrbitHighlightReader::Visitor visitor, void* context) {
   // A present end marker is a highlight claim; do not silently skip invalid ranges.
   if (obj["he"].isUnbound()) return true;
   if (!obj["he"].is<uint32_t>()) return false;
@@ -259,10 +259,15 @@ bool visitHighlight(JsonObjectConst obj, bool (*visitor)(void*, const BookmarkEn
   bookmark.highlightEndOffset = obj["he"].as<uint32_t>();
   bookmark.summary.assign(summary.c_str(), summary.size());
   bookmark.name = obj["name"] | "";
-  return visitor(context, bookmark);
+  // Missing or invalid layout metadata must not invent page 1 for an exact anchor.
+  if (obj["pc"].is<uint16_t>() && obj["pp"].is<uint16_t>() && obj["pp"].as<uint16_t>() < obj["pc"].as<uint16_t>()) {
+    bookmark.computedChapterPageCount = obj["pc"].as<uint16_t>();
+    bookmark.computedChapterProgress = obj["pp"].as<uint16_t>();
+  }
+  return visitor(context, bookmark, "");
 }
 
-bool visitEntry(Input& input, bool (*visitor)(void*, const BookmarkEntry&), void* context) {
+bool visitEntry(Input& input, BookOrbitHighlightReader::Visitor visitor, void* context) {
   LimitedAllocator allocator;
   JsonDocument doc(&allocator);
   EntryInput entryInput(input);
@@ -271,7 +276,7 @@ bool visitEntry(Input& input, bool (*visitor)(void*, const BookmarkEntry&), void
     return false;
   return visitHighlight(doc.as<JsonObjectConst>(), visitor, context);
 }
-bool visitLegacy(const std::string& bookPath, bool (*visitor)(void*, const BookmarkEntry&), void* context) {
+bool visitLegacy(const std::string& bookPath, BookOrbitHighlightReader::Visitor visitor, void* context) {
   std::string path = BookmarkUtil::getBookmarkPath(bookPath);
   if (!Storage.exists(path.c_str())) {
     path += ".bak";
@@ -309,11 +314,11 @@ bool sameAnchor(const Clipping& first, const Clipping& second) {
 
 struct LegacyContext {
   const ClippingStore& store;
-  bool (*visitor)(void*, const BookmarkEntry&);
+  BookOrbitHighlightReader::Visitor visitor;
   void* context;
   std::bitset<CLIPPING_MAX_PER_BOOK> duplicates;
 
-  static bool visit(void* data, const BookmarkEntry& entry) {
+  static bool visit(void* data, const BookmarkEntry& entry, const char* chapter) {
     auto& self = *static_cast<LegacyContext*>(data);
     for (size_t i = 0; i < self.store.clippingCount(); ++i) {
       const auto* clipping = self.store.clippingAt(i);
@@ -323,13 +328,12 @@ struct LegacyContext {
         self.duplicates.set(i);
       }
     }
-    return !self.visitor || self.visitor(self.context, entry);
+    return !self.visitor || self.visitor(self.context, entry, chapter);
   }
 };
 }  // namespace
 
-bool BookOrbitHighlightReader::visit(const std::string& bookPath, bool (*visitor)(void*, const BookmarkEntry&),
-                                     void* context) {
+bool BookOrbitHighlightReader::visit(const std::string& bookPath, Visitor visitor, void* context) {
   // The bounded index can exceed the task stack budget on S3; never replace the reader's global store.
   auto store = makeUniqueNoThrow<ClippingStore>();
   if (!store) {
@@ -349,7 +353,8 @@ bool BookOrbitHighlightReader::visit(const std::string& bookPath, bool (*visitor
     const auto* clipping = store->clippingAt(i);
     if (!clipping || clipping->startOffset == UINT32_MAX || clipping->endOffset == UINT32_MAX ||
         clipping->startOffset >= clipping->endOffset || clipping->textLength == 0 ||
-        clipping->textLength > BookmarkEntry::MAX_HIGHLIGHT_QUOTE_LENGTH) {
+        clipping->textLength > BookmarkEntry::MAX_HIGHLIGHT_QUOTE_LENGTH ||
+        strnlen(clipping->chapterTitle, sizeof(clipping->chapterTitle)) == sizeof(clipping->chapterTitle)) {
       LOG_ERR("BOHL", "Unsupported clipping anchor or quote length");
       return false;
     }
@@ -366,10 +371,12 @@ bool BookOrbitHighlightReader::visit(const std::string& bookPath, bool (*visitor
       if (sameAnchor(*clipping, *other)) legacy.duplicates.set(j);
     }
     entry.computedSpineIndex = clipping->spineIndex;
+    entry.computedChapterPageCount = clipping->pageCount;
+    entry.computedChapterProgress = clipping->startPage;
     entry.hasVisibleTextOffset = true;
     entry.visibleTextOffset = clipping->startOffset;
     entry.highlightEndOffset = clipping->endOffset;
-    if (visitor && !visitor(context, entry)) return false;
+    if (visitor && !visitor(context, entry, clipping->chapterTitle)) return false;
   }
   return true;
 }

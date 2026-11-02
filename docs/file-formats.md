@@ -15,7 +15,14 @@ Each `<anchor-md5>.state` hashes `spine:start:end` and contains one line:
 BOH1 <identity-UTC-epoch> <revision-UTC-epoch> <pending-md5> <acknowledged-md5-or-dash>
 ```
 
-The revision digest hashes `1:<spine>:<start>:<end>:<quote-byte-length>:<quote>:<label>`.
+The revision digest hashes
+`2:<spine>:<start>:<end>:<quote-byte-length>:<quote>:<label-byte-length>:<label>:<page-number>:<saved-chapter>`.
+The page number is the saved zero-based chapter start page plus one, or zero
+when the page/count metadata is missing or out of range. Zero is not uploaded.
+The chapter is empty for legacy bookmarks; their display title is resolved from
+the EPUB table of contents during export. Version-1 digests are refreshed once
+to upload chapter and page metadata, retaining the same anchor file and identity
+timestamp. These display fields never replace the exact source-offset anchors.
 An unchanged export is skipped only when both pending and acknowledged digests
 match. Identity/revision timestamps are persisted before network transmission;
 acknowledgement is recorded only after the server accepts the matching book.

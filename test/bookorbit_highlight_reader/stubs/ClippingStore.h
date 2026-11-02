@@ -10,6 +10,9 @@ inline constexpr uint16_t CLIPPING_MAX_PER_BOOK = 1024;
 
 struct Clipping {
   uint16_t spineIndex = 0;
+  uint16_t startPage = 0;
+  uint16_t endPage = 0;
+  uint16_t pageCount = 1;
   uint32_t startOffset = UINT32_MAX;
   uint32_t endOffset = UINT32_MAX;
   uint16_t textLength = 0;

@@ -58,11 +58,12 @@ bool validPosition(const char* value) {
 }  // namespace
 
 bool BookOrbitAnnotationsClient::upload(const char* bookHash, const char* datetime, const char* datetimeUpdated,
-                                        const char* pos0, const char* pos1, const char* text, const char* note) {
+                                        const char* pos0, const char* pos1, const char* text, const char* note,
+                                        const char* chapter, const uint32_t pageNumber) {
   uploadWasUnmatched = false;
   if (!bounded(bookHash, 32) || strlen(bookHash) != 32 || !validDate(datetime) || !validDate(datetimeUpdated) ||
       !validPosition(pos0) || !validPosition(pos1) || !bounded(text, 2048) || !bounded(note, 128, true) ||
-      !BookOrbitStatsClient::deviceId()[0]) {
+      !bounded(chapter, 500, true) || pageNumber > INT32_MAX || !BookOrbitStatsClient::deviceId()[0]) {
     LOG_ERR("BOAnnotations", "Invalid annotation");
     return false;
   }
@@ -85,6 +86,8 @@ bool BookOrbitAnnotationsClient::upload(const char* bookHash, const char* dateti
   row["pos1"] = pos1;
   row["text"] = text;
   row["note"] = note;
+  if (chapter[0]) row["chapter"] = chapter;
+  if (pageNumber) row["pageno"] = pageNumber;
   if (request.overflowed()) return false;
 
   // Single bounded annotation, outside the reading hot path. Heap serialization avoids

@@ -21,8 +21,9 @@ std::string ack(const char* count = "1") {
   return std::string("{\"results\":[{\"hash\":\"") + HASH + "\",\"upserted\":" + count + "}],\"unmatched\":[]}";
 }
 bool upload(const char* hash = HASH, const char* date = DATE, const char* updated = DATE, const char* pos0 = POS0,
-            const char* pos1 = POS1, const char* text = "hello", const char* note = "") {
-  return BookOrbitAnnotationsClient::upload(hash, date, updated, pos0, pos1, text, note);
+            const char* pos1 = POS1, const char* text = "hello", const char* note = "", const char* chapter = "",
+            uint32_t pageNumber = 0) {
+  return BookOrbitAnnotationsClient::upload(hash, date, updated, pos0, pos1, text, note, chapter, pageNumber);
 }
 class BookOrbitAnnotationsClientTest : public testing::Test {
  protected:
@@ -60,6 +61,32 @@ TEST_F(BookOrbitAnnotationsClientTest, SendsExactSingleAnnotationSchemaAndExplic
   EXPECT_EQ(row["text"].as<std::string>(), "hello");
   EXPECT_TRUE(row["note"].is<const char*>());
   EXPECT_EQ(row["note"].as<std::string>(), "");
+}
+
+TEST_F(BookOrbitAnnotationsClientTest, SendsChapterAndNumericPageSeparatelyFromNote) {
+  ASSERT_TRUE(upload(HASH, DATE, DATE, POS0, POS1, "hello", "my note", "Chapter 2", 17));
+  JsonDocument doc;
+  ASSERT_FALSE(deserializeJson(doc, requestBody));
+  const auto row = doc["books"][0]["annotations"][0];
+  EXPECT_EQ(row.size(), 10u);
+  EXPECT_EQ(row["chapter"].as<std::string>(), "Chapter 2");
+  EXPECT_TRUE(row["pageno"].is<unsigned int>());
+  EXPECT_EQ(row["pageno"].as<unsigned int>(), 17u);
+  EXPECT_EQ(row["note"].as<std::string>(), "my note");
+}
+
+TEST_F(BookOrbitAnnotationsClientTest, OmitsUnavailableLocationAndValidatesChapterBound) {
+  ASSERT_TRUE(upload());
+  JsonDocument doc;
+  ASSERT_FALSE(deserializeJson(doc, requestBody));
+  const auto row = doc["books"][0]["annotations"][0];
+  EXPECT_TRUE(row["chapter"].isUnbound());
+  EXPECT_TRUE(row["pageno"].isUnbound());
+  EXPECT_FALSE(upload(HASH, DATE, DATE, POS0, POS1, "hello", "", nullptr));
+  EXPECT_FALSE(upload(HASH, DATE, DATE, POS0, POS1, "hello", "", std::string(501, 'x').c_str()));
+  EXPECT_FALSE(upload(HASH, DATE, DATE, POS0, POS1, "hello", "", "chapter", UINT32_MAX));
+  EXPECT_EQ(postCount, 1);
+  EXPECT_TRUE(upload(HASH, DATE, DATE, POS0, POS1, "hello", "", std::string(500, 'x').c_str(), 1));
 }
 
 TEST_F(BookOrbitAnnotationsClientTest, RetryZeroIsAcknowledgedWithIdenticalPayload) {
