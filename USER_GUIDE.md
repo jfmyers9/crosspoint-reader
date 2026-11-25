@@ -695,7 +695,9 @@ On the **Xteink X3**, the gyroscope can be used to turn pages by tilting the dev
 
 Internal EPUB links include chapter links, cross-references, and footnotes. Tap a link on a touchscreen device, or choose "Links and Footnotes" from the Reader Menu to select a link. Press Back to return to the previous location.
 
-If the device sleeps or you close the book after following a link, the book reopens on the page you were viewing. Back still returns you to where you followed the link. The reader keeps the three most recent return positions.
+If the device sleeps or you close the book after following a link, the book reopens on the page you were viewing and Back still returns you to where you followed the link. The reader keeps up to three saved return positions; when nested footnotes exceed three levels, the original main-text starting position stays pinned alongside the two most recent intermediate jumps.
+
+While reading a footnote or endnote excursion, **KOReader Sync** (both manual **Sync Progress** and **Sync On Sleep**) and Library reading status stay anchored to the main-text location where you jumped from instead of pushing an inflated endnote percentage from the back of the book. Your current page inside the footnote still resumes locally on this device across sleeps, while another device synced mid-footnote opens at the main-text anchor before the footnote. Applying remote progress from sync clears the saved return stack.
 
 ### Dictionary Lookup
 

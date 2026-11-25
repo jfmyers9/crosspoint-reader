@@ -54,12 +54,32 @@ Writes skip unchanged values. A complete `.tmp` is flushed and closed before
 replacement; the previous `.bin` is renamed to `.bak` first, so readers can
 recover it if replacement is interrupted. FAT directory operations are not
 transactional. Finished is sticky until manually marked unread. Reader saves
-update percentage only with a valid chapter page count; applying remote sync
-uses its known fraction directly. Reaching the end-of-book screen marks finished.
-Moving a finished book to `/Read` transfers this record to its new path.
+update percentage only with a valid chapter page count and when no footnote/link
+excursion sync anchor is active; applying remote sync uses its known fraction
+directly. Reaching the end-of-book screen marks finished only when no
+footnote/link excursion sync anchor is active. Moving a finished book to `/Read`
+transfers this record to its new path.
 
 Library displays missing or invalid status as **No saved progress** in both layouts.
 Browse Files does not display or edit reading status.
+
+## Link back-stack (`links.bin`, version 2)
+
+While an EPUB has saved return positions from followed internal links, the
+reader persists the stack atomically (`links.bin.tmp` → rename) under
+`/.crosspoint/epub_<hash>/links.bin` on stack changes and removes the file when
+the stack empties or when remote sync progress is applied.
+
+- **Version 2 layout:** `u8` magic `0x82`, `u8` depth (`1..3`), followed by
+  `depth` 13-byte little-endian records: `u16 spineIndex`, `u16 pageNumber`,
+  `u16 totalPages`, `u8 flags` (`0x01` has `visibleTextOffset`, `0x02` has
+  `paragraphIndex`, `0x04` anchors KOReader sync / reading status),
+  `u32 visibleTextOffset`, `u16 paragraphIndex`.
+- **Legacy version 1 compatibility:** Records starting with `depth` (`1..3`)
+  followed by `depth` 4-byte records (`u16 spineIndex`, `u16 pageNumber`) are
+  decoded with `anchorsSync = true`, hydrated from cached section metadata when
+  available, and rewritten as version 2. Any corrupt, oversized, or
+  out-of-range record is discarded.
 
 ## Library layout setting
 

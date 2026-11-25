@@ -6,6 +6,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <ReadingStatus.h>
 #include <SyncDiagnosticHost.h>
 #include <TailscaleManager.h>
 #include <TrustedTime.h>
@@ -18,6 +19,7 @@
 #include "Epub/Section.h"
 #include "EpubReaderUtils.h"
 #include "KOReaderCredentialStore.h"
+#include "LinkBackStackFile.h"
 #include "MappedInputManager.h"
 #include "ProgressComparison.h"
 #include "ReaderUtils.h"
@@ -87,6 +89,8 @@ void KOReaderSyncActivity::saveProgressAndReturn(int spineIndex, int page) {
     requestUpdate(true);
     return;
   }
+  // Applying remote progress leaves any saved footnote excursion behind.
+  LinkBackStackFile::clear(epub->getCachePath());
   if (!ReadingStatus::update(epubPath, remoteProgress.percentage, remoteProgress.percentage == 1.0f)) {
     LOG_ERR("KOSync", "Failed to save library reading status");
   }

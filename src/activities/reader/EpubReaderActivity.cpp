@@ -21,6 +21,7 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <ReadingStatus.h>
 #include <TrustedTime.h>
 #include <WiFi.h>
 #include <esp_system.h>
@@ -47,6 +48,7 @@
 #include "EpubReaderUtils.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
+#include "LinkBackStackFile.h"
 #include "MappedInputManager.h"
 #include "ProgressMapper.h"
 #include "QrDisplayActivity.h"
@@ -82,6 +84,19 @@ bool xteinkClassPanel() {
 constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
 constexpr float bookmarkProgressEpsilon = 0.0001f;
 constexpr int CLIP_SELECTION_PAGE_WINDOW = 3;
+
+// True when (targetSpineIndex, anchor) directly names a TOC chapter entry,
+// such as a link followed from an in-book HTML Table of Contents.
+bool isTocLinkTarget(const Epub& epub, const int targetSpineIndex, const std::string& anchor) {
+  const int startTocIndex = epub.getTocIndexForSpineIndex(targetSpineIndex);
+  if (startTocIndex < 0) return false;
+  for (int i = startTocIndex; i < epub.getTocItemsCount(); ++i) {
+    const auto entry = epub.getTocItem(i);
+    if (entry.spineIndex != targetSpineIndex) break;
+    if (entry.anchor == anchor) return true;
+  }
+  return false;
+}
 
 // Word i's font: headings and CSS font-size runs can differ from the section font.
 int clippingWordFont(const GfxRenderer& renderer, const int fontId, const TextBlock& block, const uint16_t i) {
@@ -255,8 +270,6 @@ EpubReaderActivity::~EpubReaderActivity() {
   // A radio still stopped for this book's build may start again in the next one.
   if (radioReleasedForBuild.load()) bleturner::afterPaint();
 
-  if (footnoteDepth > 0 && epub) saveLinkStack();
-
   section.reset();
   CLIPPINGS.unload();
   if (pendingReadFolderMove && epub) {
@@ -342,7 +355,11 @@ bool EpubReaderActivity::loadBook() {
     }
   }
 
-  loadLinkStack();
+  if (progressLoaded) {
+    loadLinkStack();
+  } else {
+    LinkBackStackFile::clear(epub->getCachePath());
+  }
   loadCachedBookmarks();
   if (!CLIPPINGS.loadForBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), "epub")) {
     LOG_ERR("CLIP", "Failed to load clippings for %s", epub->getPath().c_str());
@@ -849,18 +866,19 @@ void EpubReaderActivity::loop() {
   }
 
   const bool atEndOfBook = currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount();
+  const bool finishedBook = atEndOfBook && !linkBackStack.hasSyncAnchor();
   clearEndOfBookOptionsIfNeeded();
 
   if (SETTINGS.removeReadBooksFromRecents) {
-    if (atEndOfBook && !recentsEntryRemoved) {
+    if (finishedBook && !recentsEntryRemoved) {
       recentsEntryRemoved = RECENT_BOOKS.removeByPath(epub->getPath());
-    } else if (!atEndOfBook && recentsEntryRemoved) {
+    } else if (!finishedBook && recentsEntryRemoved) {
       RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
       recentsEntryRemoved = false;
     }
   }
 
-  if (atEndOfBook) {
+  if (finishedBook) {
     pendingReadFolderMove = SETTINGS.moveFinishedToReadFolder && !isInReadFolder(epub->getPath());
   } else {
     pendingReadFolderMove = false;
@@ -995,7 +1013,7 @@ void EpubReaderActivity::loop() {
         startClipSelection();
         return;
       case CrossPointSettings::LP_MENU_FOOTNOTES:
-        if (footnoteDepth > 0) {
+        if (!linkBackStack.empty()) {
           restoreSavedPosition();
         } else {
           openFootnoteSelect(false);
@@ -1067,7 +1085,7 @@ void EpubReaderActivity::loop() {
     return;  // no build step before the menu shows
   }
 
-  if (footnoteDepth > 0 && mappedInput.wasReleased(MappedInputManager::Button::Back) &&
+  if (!linkBackStack.empty() && mappedInput.wasReleased(MappedInputManager::Button::Back) &&
       mappedInput.getHeldTime() < ReaderUtils::GO_BACK_OR_HOME_MS) {
     restoreSavedPosition();
     return;
@@ -1086,7 +1104,7 @@ void EpubReaderActivity::loop() {
   if ((!endOfBookMenuOpen && mappedInput.homeButtonAction() == HomeButtonAction::Footnotes) ||
       (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FOOTNOTES && mappedInput.wasPowerSingleClick() &&
        !mappedInput.wasReleased(MappedInputManager::Button::Down))) {
-    if (footnoteDepth > 0) {
+    if (!linkBackStack.empty()) {
       restoreSavedPosition();
     } else {
       openFootnoteSelect(false);
@@ -1197,32 +1215,43 @@ void EpubReaderActivity::jumpToPercent(int percent) {
       (spineSize == 0) ? 0.0f : static_cast<float>(targetSize - prevCumulative) / static_cast<float>(spineSize);
   pendingSpineProgress = std::clamp(pendingSpineProgress, 0.0f, 1.0f);
 
+  bool hadLinkStack = false;
   {
     RenderLock lock;
     clearPendingNavigation();
+    hadLinkStack = !linkBackStack.empty();
+    linkBackStack.clear();
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = 0;
     pendingPercentJump = true;
     section.reset();
   }
+  if (hadLinkStack) LinkBackStackFile::clear(epub->getCachePath());
   requestUpdate();
 }
 
 void EpubReaderActivity::applyProgressChange(const ProgressChangeResult& sync) {
   if (sync.hasVisibleTextOffset && sync.spineIndex >= 0 && sync.spineIndex < epub->getSpineItemsCount()) {
-    RenderLock lock;
-    clearDeferredReposition();
-    const auto page = section && currentSpineIndex == sync.spineIndex
-                          ? section->getPageForVisibleTextOffset(sync.visibleTextOffset)
-                          : std::nullopt;
-    if (page) {
-      section->currentPage = *page;
-    } else {
-      currentSpineIndex = sync.spineIndex;
-      pendingOffsetJump = sync.visibleTextOffset;
-      nextPageNumber = std::max(0, sync.page);
-      section.reset();
+    bool hadLinkStack = false;
+    {
+      RenderLock lock;
+      clearDeferredReposition();
+      pendingOffsetJump.reset();
+      hadLinkStack = !linkBackStack.empty();
+      linkBackStack.clear();
+      const auto page = section && currentSpineIndex == sync.spineIndex
+                            ? section->getPageForVisibleTextOffset(sync.visibleTextOffset)
+                            : std::nullopt;
+      if (page) {
+        section->currentPage = *page;
+      } else {
+        currentSpineIndex = sync.spineIndex;
+        pendingOffsetJump = sync.visibleTextOffset;
+        nextPageNumber = std::max(0, sync.page);
+        section.reset();
+      }
     }
+    if (hadLinkStack) LinkBackStackFile::clear(epub->getCachePath());
     requestUpdate();
     return;
   }
@@ -1242,19 +1271,26 @@ void EpubReaderActivity::applyProgressChange(const ProgressChangeResult& sync) {
     targetPage = fallback.pageNumber;
   }
 
-  RenderLock lock;
-  clearDeferredReposition();
+  bool hadLinkStack = false;
+  {
+    RenderLock lock;
+    clearDeferredReposition();
+    pendingOffsetJump.reset();
+    hadLinkStack = !linkBackStack.empty();
+    linkBackStack.clear();
 
-  if (currentSpineIndex != targetSpineIndex) {
-    currentSpineIndex = targetSpineIndex;
-    nextPageNumber = targetPage;
-    section.reset();
-  } else if (section && section->currentPage != targetPage) {
-    const int clampedTargetPage = std::max(0, targetPage);
-    section->currentPage = clampedTargetPage;
-  } else if (!section) {
-    nextPageNumber = targetPage;
+    if (currentSpineIndex != targetSpineIndex) {
+      currentSpineIndex = targetSpineIndex;
+      nextPageNumber = targetPage;
+      section.reset();
+    } else if (section && section->currentPage != targetPage) {
+      const int clampedTargetPage = std::max(0, targetPage);
+      section->currentPage = clampedTargetPage;
+    } else if (!section) {
+      nextPageNumber = targetPage;
+    }
   }
+  if (hadLinkStack) LinkBackStackFile::clear(epub->getCachePath());
   requestUpdate();
 }
 
@@ -1306,12 +1342,18 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               return;
             }
             const auto& chapterResult = std::get<ChapterResult>(result.data);
-            RenderLock lock;
-            clearPendingNavigation();
-            currentSpineIndex = chapterResult.spineIndex;
-            pendingAnchor = chapterResult.anchor;
-            nextPageNumber = 0;
-            section.reset();
+            bool hadLinkStack = false;
+            {
+              RenderLock lock;
+              clearPendingNavigation();
+              hadLinkStack = !linkBackStack.empty();
+              linkBackStack.clear();
+              currentSpineIndex = chapterResult.spineIndex;
+              pendingAnchor = chapterResult.anchor;
+              nextPageNumber = 0;
+              section.reset();
+            }
+            if (hadLinkStack) LinkBackStackFile::clear(epub->getCachePath());
             requestUpdate();
           });
       break;
@@ -1411,6 +1453,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           if (!saveProgress(backupSpine, backupPage, backupPageCount)) {
             LOG_ERR("ERS", "Failed to save progress before cache clear");
           }
+          if (!linkBackStack.empty()) {
+            LinkBackStackFile::save(epub->getCachePath(), linkBackStack);
+          }
         }
       }
       onGoHome();
@@ -1475,7 +1520,7 @@ bool EpubReaderActivity::launchKOReaderSync() {
   // events still queued.
   if (!KOREADER_STORE.hasCredentials()) {
     activityManager.replaceActivity(std::make_unique<KOReaderSyncActivity>(
-        renderer, mappedInput, epub->getPath(), getCurrentPosition(), SavedProgressPosition{}, "",
+        renderer, mappedInput, epub->getPath(), CrossPointPosition{}, SavedProgressPosition{}, "",
         /*pluginEventsOnly=*/true));
     return true;
   }
@@ -1485,9 +1530,9 @@ bool EpubReaderActivity::launchKOReaderSync() {
   const int currentPage = section ? section->currentPage : nextPageNumber;
   const int totalPages = section ? section->estimatedTotalPages() : cachedChapterTotalPageCount;
 
-  CrossPointPosition localPos = getCurrentPosition();
+  CrossPointPosition localPos = getSyncPosition();
   SavedProgressPosition localKoPos;
-  const int tocIdx = epub->getTocIndexForSpineIndex(currentSpineIndex);
+  const int tocIdx = epub->getTocIndexForSpineIndex(localPos.spineIndex);
   std::string localChapterName = (tocIdx >= 0) ? epub->getTocItem(tocIdx).title : "";
   const std::string savedEpubPath = epub->getPath();
 
@@ -1516,8 +1561,6 @@ bool EpubReaderActivity::launchKOReaderSync() {
       GfxRenderer::FrameBufferLoan loan(renderer);
       localKoPos = ProgressMapper::toSavedProgress(epub, localPos);
     }
-    // The destructor can no longer save the back-stack once epub is gone.
-    if (footnoteDepth > 0) saveLinkStack();
     rememberBookOnceRendered();
     epub.reset();
   }
@@ -1633,20 +1676,34 @@ bool EpubReaderActivity::skipPages(int amount) {
   LocalReadingStats::breakSequence();
 #endif
   if (amount > 0) {
-    RenderLock lock;
-    nextPageNumber = 0;
-    currentSpineIndex++;
-    section.reset();
+    bool hadLinkStack = false;
+    {
+      RenderLock lock;
+      clearPendingNavigation();
+      hadLinkStack = !linkBackStack.empty();
+      linkBackStack.clear();
+      nextPageNumber = 0;
+      currentSpineIndex++;
+      section.reset();
+    }
+    if (hadLinkStack) LinkBackStackFile::clear(epub->getCachePath());
     return true;
   } else {
     if (section->currentPage > 0) {
       section->currentPage = 0;
       return true;
     } else if (currentSpineIndex > 0) {
-      RenderLock lock;
-      nextPageNumber = 0;
-      currentSpineIndex--;
-      section.reset();
+      bool hadLinkStack = false;
+      {
+        RenderLock lock;
+        clearPendingNavigation();
+        hadLinkStack = !linkBackStack.empty();
+        linkBackStack.clear();
+        nextPageNumber = 0;
+        currentSpineIndex--;
+        section.reset();
+      }
+      if (hadLinkStack) LinkBackStackFile::clear(epub->getCachePath());
       return true;
     }
   }
@@ -2170,7 +2227,8 @@ void EpubReaderActivity::renderBook() {
 }
 
 void EpubReaderActivity::onEndOfBookRendered() {
-  if (epub && epub->getSpineItemsCount() > 0 && !ReadingStatus::mark(epub->getPath(), ReadingStatus::State::Finished)) {
+  if (!linkBackStack.hasSyncAnchor() && epub && epub->getSpineItemsCount() > 0 &&
+      !ReadingStatus::mark(epub->getPath(), ReadingStatus::State::Finished)) {
     LOG_ERR("ERS", "Failed to mark book finished");
   }
   automaticPageTurnActive = false;
@@ -2215,6 +2273,7 @@ void EpubReaderActivity::clearPendingNavigation() {
 #if defined(CROSSPOINT_ENABLE_BOOKORBIT_STATS)
   LocalReadingStats::breakSequence();
 #endif
+  pendingOffsetJump.reset();
   clearDeferredReposition();
 }
 
@@ -2230,7 +2289,17 @@ bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
                  ? currentPageVisibleOffset
                  : section->getVisibleTextOffsetForPage(static_cast<uint16_t>(currentPage));
   }
-  return EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, offset);
+  if (!EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, offset)) {
+    return false;
+  }
+  if (!linkBackStack.hasSyncAnchor() && pageCount > 0 && currentPage >= 0 && currentPage < pageCount &&
+      spineIndex >= 0 && spineIndex < epub->getSpineItemsCount() && epub->getBookSize() > 0) {
+    if (!ReadingStatus::update(epub->getPath(),
+                               epub->calculateProgress(spineIndex, static_cast<float>(currentPage) / pageCount))) {
+      LOG_ERR("ERS", "Failed to save library reading status");
+    }
+  }
+  return true;
 }
 
 void EpubReaderActivity::rememberCurrentContentOffset() {
@@ -3050,11 +3119,17 @@ void EpubReaderActivity::handleOverlayInput() {
     const int spineCount = epub->getSpineItemsCount();
     target = std::clamp(target, 0, spineCount - 1);
     if (target != currentSpineIndex) {
-      RenderLock lock;
-      clearPendingNavigation();
-      nextPageNumber = 0;
-      currentSpineIndex = target;
-      section.reset();
+      bool hadLinkStack = false;
+      {
+        RenderLock lock;
+        clearPendingNavigation();
+        hadLinkStack = !linkBackStack.empty();
+        linkBackStack.clear();
+        nextPageNumber = 0;
+        currentSpineIndex = target;
+        section.reset();
+      }
+      if (hadLinkStack) LinkBackStackFile::clear(epub->getCachePath());
     }
     requestUpdate();
   };
@@ -3161,12 +3236,18 @@ void EpubReaderActivity::handleOverlayInput() {
     } else if (overlay == Overlay::Contents) {
       const auto item = epub->getTocItem(panelIndex);
       if (item.spineIndex != -1) {
-        RenderLock lock;
-        clearPendingNavigation();
-        currentSpineIndex = item.spineIndex;
-        pendingAnchor = item.anchor;
-        nextPageNumber = 0;
-        section.reset();
+        bool hadLinkStack = false;
+        {
+          RenderLock lock;
+          clearPendingNavigation();
+          hadLinkStack = !linkBackStack.empty();
+          linkBackStack.clear();
+          currentSpineIndex = item.spineIndex;
+          pendingAnchor = item.anchor;
+          nextPageNumber = 0;
+          section.reset();
+        }
+        if (hadLinkStack) LinkBackStackFile::clear(epub->getCachePath());
       }
       overlay = Overlay::None;
       discardOverlayPage();
@@ -3477,91 +3558,93 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
     return;
   }
 
-  if (savePosition) {
-    // Full: drop the oldest entry so Back always returns from the newest jump.
-    if (footnoteDepth == MAX_FOOTNOTE_DEPTH) {
-      std::copy(savedPositions + 1, savedPositions + MAX_FOOTNOTE_DEPTH, savedPositions);
-      footnoteDepth--;
-    }
-    // A child screen (menu, footnote list) may have released the section;
-    // nextPageNumber then holds the page it was on.
-    const int page = section ? section->currentPage : nextPageNumber;
-    savedPositions[footnoteDepth] = {currentSpineIndex, page};
-    footnoteDepth++;
-    LOG_DBG("ERS", "Saved position [%d]: spine %d, page %d", footnoteDepth, currentSpineIndex, page);
-  }
+  const bool anchorsSync = !isTocLinkTarget(*epub, targetSpineIndex, anchor);
+  LinkBackStack linkSnapshot;
+  bool shouldPersistStack = false;
 
   {
     RenderLock lock;
+    if (savePosition) {
+      const CrossPointPosition origin = getCurrentPosition();
+      std::optional<int> sameSpineTargetPage;
+      if (targetSpineIndex == origin.spineIndex && !anchor.empty() && section) {
+        if (const auto page = section->findAnchor(anchor)) {
+          sameSpineTargetPage = *page;
+        }
+      }
+      const bool pushed = linkBackStack.followLink(origin, targetSpineIndex, sameSpineTargetPage, anchorsSync);
+      if (pushed) {
+        LOG_DBG("ERS", "Saved position [%d]: spine %d, page %d (anchor=%d)", linkBackStack.depth(), origin.spineIndex,
+                origin.pageNumber, anchorsSync ? 1 : 0);
+      } else {
+        LOG_DBG("ERS", "Unwound link stack to depth %d on return to spine %d", linkBackStack.depth(), targetSpineIndex);
+      }
+      linkSnapshot = linkBackStack;
+      shouldPersistStack = true;
+    }
+
     clearPendingNavigation();
     pendingAnchor = std::move(anchor);
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = 0;
     section.reset();
   }
+  if (shouldPersistStack) {
+    LinkBackStackFile::save(epub->getCachePath(), linkSnapshot);
+  }
   requestUpdate();
   LOG_DBG("ERS", "Navigated to spine %d for href: %s", targetSpineIndex, hrefStr.c_str());
 }
 
-void EpubReaderActivity::saveLinkStack() const {
-  // [depth] then depth x (spine u16 LE, page u16 LE)
-  uint8_t data[1 + MAX_FOOTNOTE_DEPTH * 4];
-  size_t size = 0;
-  data[size++] = static_cast<uint8_t>(footnoteDepth);
-  for (int i = 0; i < footnoteDepth; i++) {
-    const SavedPosition& pos = savedPositions[i];
-    data[size++] = pos.spineIndex & 0xFF;
-    data[size++] = (pos.spineIndex >> 8) & 0xFF;
-    data[size++] = pos.pageNumber & 0xFF;
-    data[size++] = (pos.pageNumber >> 8) & 0xFF;
-  }
-  HalFile f;
-  if (!Storage.openFileForWrite("ERS", epub->getCachePath() + "/links.bin", f)) return;
-  if (f.write(data, size) != size) LOG_ERR("ERS", "Failed to write link stack");
-}
-
 void EpubReaderActivity::loadLinkStack() {
-  const std::string path = epub->getCachePath() + "/links.bin";
-  if (!Storage.exists(path.c_str())) return;
-  {
-    HalFile f;
-    uint8_t data[1 + MAX_FOOTNOTE_DEPTH * 4];
-    if (Storage.openFileForRead("ERS", path, f)) {
-      const int size = f.read(data, sizeof(data));
-      const int depth = size > 0 ? data[0] : 0;
-      if (depth >= 1 && depth <= MAX_FOOTNOTE_DEPTH && size == 1 + depth * 4) {
-        const int spineCount = epub->getSpineItemsCount();
-        bool valid = true;
-        for (int i = 0; i < depth; i++) {
-          const uint8_t* p = data + 1 + i * 4;
-          savedPositions[i] = {p[0] | (p[1] << 8), p[2] | (p[3] << 8)};
-          valid = valid && savedPositions[i].spineIndex < spineCount;
-        }
-        if (valid) {
-          footnoteDepth = depth;
-          LOG_DBG("ERS", "Loaded link stack, depth %d", depth);
-        }
-      }
+  bool loadedLegacyV1 = false;
+  if (!LinkBackStackFile::load(epub->getCachePath(), linkBackStack, epub->getSpineItemsCount(), &loadedLegacyV1)) {
+    return;
+  }
+  LOG_DBG("ERS", "Loaded link stack, depth %d", linkBackStack.depth());
+  if (!loadedLegacyV1) return;
+
+  // Upgrade legacy v1 entries (spine + page only) from cached section metadata
+  // so KOReader sync can map the root anchor accurately without re-paginating.
+  for (int i = 0; i < linkBackStack.depth(); ++i) {
+    SavedLinkPosition& entry = linkBackStack.at(i);
+    if (entry.totalPages > 0) continue;
+    Section cachedSection(epub, entry.spineIndex, renderer);
+    if (const auto total = cachedSection.getCachedPageCount()) {
+      entry.totalPages = *total;
+    }
+    if (const auto offset = cachedSection.getVisibleTextOffsetForPage(entry.pageNumber)) {
+      entry.visibleTextOffset = *offset;
+      entry.hasVisibleTextOffset = true;
+    }
+    const uint16_t paragraphPage = entry.pageNumber > 0 ? static_cast<uint16_t>(entry.pageNumber - 1) : 0;
+    if (const auto pIdx = cachedSection.getParagraphIndexForPage(paragraphPage)) {
+      entry.paragraphIndex = *pIdx;
+      entry.hasParagraphIndex = true;
     }
   }
-  // Consumed once: a later exit rewrites it, and an unclean shutdown must not
-  // resurrect a stale stack.
-  Storage.remove(path.c_str());
+  LinkBackStackFile::save(epub->getCachePath(), linkBackStack);
 }
 
 void EpubReaderActivity::restoreSavedPosition() {
-  if (footnoteDepth <= 0) return;
-  footnoteDepth--;
-  const auto& pos = savedPositions[footnoteDepth];
-  LOG_DBG("ERS", "Restoring position [%d]: spine %d, page %d", footnoteDepth, pos.spineIndex, pos.pageNumber);
-
+  LinkBackStack linkSnapshot;
   {
     RenderLock lock;
+    const auto restored = linkBackStack.pop();
+    if (!restored) return;
+    LOG_DBG("ERS", "Restoring position [%d]: spine %d, page %d", linkBackStack.depth(), restored->spineIndex,
+            restored->pageNumber);
+
     clearPendingNavigation();
-    currentSpineIndex = pos.spineIndex;
-    nextPageNumber = pos.pageNumber;
+    currentSpineIndex = restored->spineIndex;
+    nextPageNumber = restored->pageNumber;
+    if (restored->hasVisibleTextOffset) {
+      pendingOffsetJump = restored->visibleTextOffset;
+    }
     section.reset();
+    linkSnapshot = linkBackStack;
   }
+  LinkBackStackFile::save(epub->getCachePath(), linkSnapshot);
   requestUpdate();
 }
 
@@ -3570,8 +3653,8 @@ void EpubReaderActivity::prepareForSleep() {
   if (!epub || !KOREADER_STORE.getSyncOnSleep() || !KOREADER_STORE.hasCredentials()) return;
   // Sync On Sleep runs after this activity is gone, so hand over the position now.
   // ActivityManager already holds the render lock here; taking it again would deadlock.
-  CrossPointPosition position = getCurrentPosition();
-  if (isAtEndOfBook() && epub->getSpineItemsCount() > 0) {
+  CrossPointPosition position = getSyncPosition();
+  if (!linkBackStack.hasSyncAnchor() && isAtEndOfBook() && epub->getSpineItemsCount() > 0) {
     // The finished screen sits one past the last chapter, which has no size or XPath.
     // Hand over the end of the last chapter instead.
     position = {epub->getSpineItemsCount() - 1, 1, 2};
@@ -3687,6 +3770,16 @@ ScreenshotInfo EpubReaderActivity::getScreenshotInfo() const {
 }
 
 int EpubReaderActivity::getProgressBasisPoints() const {
+  if (const auto anchor = linkBackStack.syncAnchor()) {
+    if (!epub || epub->getBookSize() == 0) return getProgressPercent() * 100;
+    const float chapterProgress =
+        anchor->totalPages > 0
+            ? std::clamp(static_cast<float>(anchor->pageNumber) / static_cast<float>(anchor->totalPages), 0.0f, 1.0f)
+            : 0.0f;
+    const int basisPoints =
+        static_cast<int>(epub->calculateProgress(anchor->spineIndex, chapterProgress) * 10000.0f + 0.5f);
+    return std::clamp(basisPoints, 0, 10000);
+  }
   if (isAtEndOfBook()) return 10000;
   if (!epub || !section || epub->getBookSize() == 0) return getProgressPercent() * 100;
   const int totalPages = section->estimatedTotalPages();
@@ -3723,4 +3816,11 @@ CrossPointPosition EpubReaderActivity::getCurrentPosition() const {
     localPos.hasParagraphIndex = true;
   }
   return localPos;
+}
+
+CrossPointPosition EpubReaderActivity::getSyncPosition() const {
+  if (const auto anchor = linkBackStack.syncAnchor()) {
+    return anchor->toCrossPointPosition();
+  }
+  return getCurrentPosition();
 }
